@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block content %}
+<h2 class="mb-4"><i class="bi bi-grid-3x3-gap"></i> Analysis Dashboard</h2>
+<div class="table-responsive">
+    <table class="table table-dark table-hover align-middle">
+        <thead>
+            <tr>
+                <th>Filename</th>
+                <th>Date</th>
+                <th>Status</th>
+                <th>Risk Score</th>
+                <th>Flows</th>
+                <th>Findings</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for a in analyses %}
+            <tr>
+                <td>{{ a.filename }}</td>
+                <td>{{ a.created_at.strftime('%Y-%m-%d %H:%M') if a.created_at else '—' }}</td>
+                <td><span class="badge bg-secondary">{{ a.status }}</span></td>
+                <td>
+                    {% set score = a.risk_score or 0 %}
+                    <span class="badge {% if score >= 8 %}bg-danger{% elif score >= 5 %}bg-warning text-dark{% else %}bg-success{% endif %}">
+                        {{ '%.1f'|format(score) }}
+                    </span>
+                </td>
+                <td>{{ a.total_flows or 0 }}</td>
+                <td>{{ a.total_findings or 0 }}</td>
+                <td>
+                    {% if a.status == 'complete' %}
+                    <a href="{{ url_for('main.report', analysis_id=a.id) }}" class="btn btn-sm btn-info">Report</a>
+                    {% elif a.status != 'failed' %}
+                    <a href="{{ url_for('main.analysis_progress', analysis_id=a.id) }}" class="btn btn-sm btn-outline-light">Progress</a>
+                    {% endif %}
+                    <button class="btn btn-sm btn-outline-danger" onclick="deleteAnalysis('{{ a.id }}')">Delete</button>
+                </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="7" class="text-center text-muted">No analyses yet. <a href="{{ url_for('main.index') }}">Upload a PCAP</a></td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+async function deleteAnalysis(id) {
+    if (!confirm('Delete this analysis?')) return;
+    await fetch(`/api/analysis/${id}`, { method: 'DELETE' });
+    location.reload();
+}
+</script>
+{% endblock %}

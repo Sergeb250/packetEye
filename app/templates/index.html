@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Upload{% endblock %}
+{% block content %}
+<div class="text-center mb-5">
+    <h1 class="display-4 fw-bold">packetEye</h1>
+    <p class="lead text-secondary">AI-Powered Network Forensics &amp; Threat Hunting</p>
+    <p class="text-muted">Upload PCAP captures for automated flow reconstruction, threat enrichment, and analyst-grade intelligence.</p>
+</div>
+
+<div class="row justify-content-center">
+    <div class="col-lg-8">
+        <div class="card bg-black border-secondary">
+            <div class="card-body p-4">
+                <form id="uploadForm" enctype="multipart/form-data">
+                    <div id="dropZone" class="drop-zone mb-4">
+                        <i class="bi bi-cloud-upload display-4 text-info"></i>
+                        <p class="mt-2 mb-1">Drag &amp; drop PCAP file here</p>
+                        <p class="text-muted small">.pcap, .pcapng, .cap — max {{ config.MAX_UPLOAD_MB }}MB</p>
+                        <input type="file" id="fileInput" name="file" accept=".pcap,.pcapng,.cap" class="d-none">
+                        <button type="button" class="btn btn-outline-info btn-sm" onclick="document.getElementById('fileInput').click()">Browse Files</button>
+                    </div>
+                    <div id="fileInfo" class="alert alert-secondary d-none"></div>
+                    <div class="mb-3">
+                        <label class="form-label">Analysis Name (optional)</label>
+                        <input type="text" class="form-control bg-dark text-light border-secondary" name="analysis_name" id="analysisName">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Analyst Notes (optional)</label>
+                        <textarea class="form-control bg-dark text-light border-secondary" name="analyst_notes" rows="2" id="analystNotes"></textarea>
+                    </div>
+                    <button type="submit" class="btn btn-info w-100" id="submitBtn" disabled>
+                        <i class="bi bi-play-fill"></i> Start Analysis
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/upload.js') }}"></script>
+{% endblock %}

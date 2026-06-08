@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Export — {{ analysis.filename }}{% endblock %}
+{% block content %}
+<h2>packetEye Report — {{ analysis.filename }}</h2>
+<p>Risk Score: {{ report.risk_score or analysis.risk_score }}/10</p>
+<p>{{ report.executive_summary or '' }}</p>
+<h3>Findings ({{ findings|length }})</h3>
+{% for f in findings %}
+<div class="mb-3 border p-2">
+    <strong>[{{ f.severity|upper }}] {{ f.title }}</strong>
+    <p>{{ f.llm_explanation or f.description }}</p>
+</div>
+{% endfor %}
+{% endblock %}
