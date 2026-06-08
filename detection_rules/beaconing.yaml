@@ -1,0 +1,27 @@
+- id: BEACON-001
+  name: Beaconing — periodic outbound connection
+  description: Repeated connections to the same external destination at regular intervals, indicating C2 check-in behavior.
+  severity: high
+  enabled: true
+  mitre_tactic: TA0011 - Command and Control
+  mitre_technique: T1071 - Application Layer Protocol
+  parameters:
+    min_connections: 10
+    max_jitter_pct: 20
+    min_interval_seconds: 10
+    max_interval_seconds: 3600
+  recommendation: Isolate the source host and examine the beacon destination TLS certificate and registration history.
+
+- id: BEACON-002
+  name: Low-and-slow beacon
+  description: Periodic beacon with interval greater than 30 minutes — evades short-window detection.
+  severity: high
+  enabled: true
+  mitre_tactic: TA0011 - Command and Control
+  mitre_technique: T1071 - Application Layer Protocol
+  parameters:
+    min_connections: 5
+    max_jitter_pct: 20
+    min_interval_seconds: 1800
+    max_interval_seconds: 86400
+  recommendation: Capture a longer session and correlate with endpoint telemetry.

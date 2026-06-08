@@ -1,0 +1,21 @@
+- id: ARPSPOOFING-001
+  name: ARP cache poisoning
+  description: Gratuitous ARP for gateway IP from a non-gateway MAC address.
+  severity: critical
+  enabled: true
+  mitre_tactic: TA0006 - Credential Access
+  mitre_technique: T1557 - Adversary-in-the-Middle
+  parameters: {}
+  recommendation: Verify gateway MAC addresses and enable DHCP snooping / DAI on switches.
+
+- id: ARPSPOOFING-002
+  name: ARP reply storm
+  description: Excessive unsolicited ARP replies from a single MAC in a short window.
+  severity: high
+  enabled: true
+  mitre_tactic: TA0006 - Credential Access
+  mitre_technique: T1557 - Adversary-in-the-Middle
+  parameters:
+    min_replies: 50
+    window_seconds: 10
+  recommendation: Locate the offending host and inspect for ARP spoofing tools.

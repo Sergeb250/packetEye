@@ -1,0 +1,85 @@
+- id: PORTMISMATCH-001
+  name: Protocol on wrong port
+  description: Application protocol detected on non-standard port (SSH not on 22, HTTP not on 80/443, DNS not on 53).
+  severity: medium
+  enabled: true
+  mitre_tactic: TA0011 - Command and Control
+  mitre_technique: T1571 - Non-Standard Port
+  parameters: {}
+  recommendation: Deep-inspect the flow payload and verify the service running on the non-standard port.
+
+- id: EXFIL-001
+  name: Large outbound data spike
+  description: Single flow with outbound bytes significantly above baseline to a rare external destination.
+  severity: high
+  enabled: true
+  mitre_tactic: TA0010 - Exfiltration
+  mitre_technique: T1041 - Exfiltration Over C2 Channel
+  parameters:
+    multiplier: 10
+  recommendation: Identify the process responsible and review data classification of transferred content.
+
+- id: LATERAL-001
+  name: SMB/RDP lateral movement
+  description: Internal host scanning other internal hosts on lateral movement ports.
+  severity: high
+  enabled: true
+  mitre_tactic: TA0008 - Lateral Movement
+  mitre_technique: T1021 - Remote Services
+  parameters:
+    ports: [445, 3389, 5985]
+    min_targets: 3
+  recommendation: Check authentication logs on targeted hosts and isolate the source.
+
+- id: DGATOP-001
+  name: DGA-like domain
+  description: DNS query for domain with abnormal consonant-to-vowel ratio or bigram entropy.
+  severity: medium
+  enabled: true
+  mitre_tactic: TA0011 - Command and Control
+  mitre_technique: T1568 - Dynamic Resolution
+  parameters:
+    min_cv_ratio: 3
+    min_bigram_entropy: 4.2
+  recommendation: Submit domain to sandbox and block at DNS firewall.
+
+- id: TLSNONSNI-001
+  name: TLS without SNI
+  description: TLS ClientHello to external IP without Server Name Indication extension.
+  severity: low
+  enabled: true
+  mitre_tactic: TA0011 - Command and Control
+  mitre_technique: T1573 - Encrypted Channel
+  parameters: {}
+  recommendation: Inspect certificate and JA3 fingerprint against threat intel.
+
+- id: CLEARTEXT-001
+  name: Credentials in cleartext
+  description: HTTP POST to authentication endpoint without TLS encryption.
+  severity: high
+  enabled: true
+  mitre_tactic: TA0006 - Credential Access
+  mitre_technique: T1552 - Unsecured Credentials
+  parameters: {}
+  recommendation: Force HTTPS and rotate potentially exposed credentials.
+
+- id: NEWDOMAIN-001
+  name: Newly registered domain
+  description: Connection to domain registered within the last 30 days combined with DNS lookup.
+  severity: medium
+  enabled: true
+  mitre_tactic: TA0011 - Command and Control
+  mitre_technique: T1568.002 - Domain Generation Algorithms
+  parameters: {}
+  recommendation: Block domain and investigate host that initiated the connection.
+
+- id: LONGCONN-001
+  name: Abnormally long connection
+  description: Single TCP flow duration exceeds 8 hours — possible persistent C2 socket.
+  severity: high
+  enabled: true
+  mitre_tactic: TA0011 - Command and Control
+  mitre_technique: T1095 - Non-Application Layer Protocol
+  parameters:
+    min_duration_hours: 8
+  recommendation: Terminate the long-lived connection and capture full packet trace for review.

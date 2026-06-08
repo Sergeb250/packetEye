@@ -1,0 +1,32 @@
+- id: DNSTUNNEL-001
+  name: DNS tunneling — payload size
+  description: DNS query or response payload exceeds normal size threshold, suggesting data exfiltration via DNS.
+  severity: medium
+  enabled: true
+  mitre_tactic: TA0011 - Command and Control
+  mitre_technique: T1071.004 - DNS
+  parameters:
+    min_payload_bytes: 200
+  recommendation: Inspect DNS query strings and block suspicious domains at the resolver.
+
+- id: DNSTUNNEL-002
+  name: DNS tunneling — query frequency
+  description: High rate of DNS queries to the same domain apex.
+  severity: medium
+  enabled: true
+  mitre_tactic: TA0010 - Exfiltration
+  mitre_technique: T1048.003 - Exfiltration Over Unencrypted Non-C2 Protocol
+  parameters:
+    queries_per_minute: 100
+  recommendation: Review DNS logs for encoded subdomain labels.
+
+- id: DNSTUNNEL-003
+  name: High entropy DNS labels
+  description: Subdomain labels with high Shannon entropy suggest encoded tunnel data.
+  severity: medium
+  enabled: true
+  mitre_tactic: TA0011 - Command and Control
+  mitre_technique: T1071.004 - DNS
+  parameters:
+    min_entropy: 3.8
+  recommendation: Decode suspicious subdomain strings and block the domain apex.

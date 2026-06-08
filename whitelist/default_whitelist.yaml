@@ -1,0 +1,16 @@
+cidr_ranges:
+  - 13.32.0.0/15
+  - 104.16.0.0/13
+  - 8.8.8.0/24
+  - 208.67.222.0/24
+
+domains:
+  - windowsupdate.microsoft.com
+  - "*.google.com"
+  - "*.gstatic.com"
+  - "*.akamaiedge.net"
+
+ports_protocols:
+  - { port: 53, protocol: UDP, note: "Standard DNS" }
+  - { port: 443, protocol: TCP, note: "Standard HTTPS" }
+  - { port: 80, protocol: TCP, note: "Standard HTTP" }

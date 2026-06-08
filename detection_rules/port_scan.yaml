@@ -1,0 +1,23 @@
+- id: PORTSCAN-001
+  name: Port scan — horizontal
+  description: Single src IP connects to many distinct dst ports on same dst IP within a short window.
+  severity: high
+  enabled: true
+  mitre_tactic: TA0007 - Discovery
+  mitre_technique: T1046 - Network Service Discovery
+  parameters:
+    min_ports: 50
+    window_seconds: 30
+  recommendation: Block the source IP and investigate the scanning host for compromise.
+
+- id: PORTSCAN-002
+  name: Port scan — vertical (host sweep)
+  description: Single src IP connects to same port on many distinct dst IPs within a short window.
+  severity: high
+  enabled: true
+  mitre_tactic: TA0007 - Discovery
+  mitre_technique: T1046 - Network Service Discovery
+  parameters:
+    min_hosts: 30
+    window_seconds: 60
+  recommendation: Investigate the source host for worm or scanner activity.
