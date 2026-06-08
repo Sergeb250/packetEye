@@ -1,0 +1,10 @@
+# Secrets and runtime artifacts
+.env
+*.db
+packeteye.db
+data/uploads/
+__pycache__/
+*.pyc
+venv/
+.pytest_cache/
+ml_models/*.pkl
