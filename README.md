@@ -43,7 +43,9 @@ The frontend polls `/api/analysis/<id>/status` every 3 seconds and shows a live 
 
 ---
 
-![PacketEye Demo](https://raw.githubusercontent.com/Sergeb250/packetEye/59cff38eb29fe1b9e0b5e334ed4e2a3d0c4e5301/packeteye%20demo.gif)
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Sergeb250/packetEye/59cff38eb29fe1b9e0b5e334ed4e2a3d0c4e5301/packeteye%20demo.gif" alt="PacketEye Demo" width="100%">
+</p>
 
 ## 2. System Architecture
 
