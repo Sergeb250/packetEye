@@ -1,0 +1,28 @@
+# packetEye NIDS sensor — web app + API (capture is started from the dashboard).
+# Install:
+#   sudo cp deploy/linux/packeteye-sensor.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now packeteye-sensor
+# Edit User/WorkingDirectory/paths to match your deployment.
+
+[Unit]
+Description=packetEye NIDS sensor (web + API)
+After=network-online.target redis-server.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=packeteye
+Group=packeteye
+WorkingDirectory=/opt/packetEye
+EnvironmentFile=/opt/packetEye/.env
+# gunicorn for production; swap for `python run.py` in dev.
+ExecStart=/opt/packetEye/.venv/bin/gunicorn -w 2 -b 127.0.0.1:8000 "app:create_app()"
+Restart=on-failure
+RestartSec=5
+# Capture needs raw sockets. Prefer setcap on suricata/tcpdump (see installer);
+# only grant these if running capture as this service user without setcap.
+AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
+NoNewPrivileges=false
+
+[Install]
+WantedBy=multi-user.target
