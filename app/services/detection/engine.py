@@ -10,10 +10,10 @@ from pathlib import Path
 
 import yaml
 
-from app.models.analysis import Finding, Flow
+from app.models.analysis import Finding, Flow, Observable
 from app.services.detection.ml_engine import MLEngine
 from app.services.detection.rules import load_rules
-from app.services.detection.scoring import severity_to_score
+from app.services.detection.scoring import compute_hybrid_flow_severity, severity_to_score
 
 logger = logging.getLogger(__name__)
 
@@ -70,20 +70,35 @@ class DetectionEngine:
         self.config = config
         self.rules = load_rules(Path(config.get("DETECTION_RULES_DIR", "detection_rules")))
         self.whitelist = WhitelistEngine(Path(config.get("WHITELIST_PATH", "")))
+        calibration = config.get("ML_SCORE_CALIBRATION_PATH", "")
         self.ml = MLEngine(
             model_path=Path(config.get("ML_MODEL_PATH", "")),
-            threshold=float(config.get("ML_ANOMALY_THRESHOLD", 7.5)),
+            scaler_path=Path(config.get("ML_SCALER_PATH", "")),
+            schema_path=Path(config.get("ML_FEATURE_SCHEMA_PATH", "")),
+            calibration_path=Path(calibration) if calibration else None,
+            threshold=float(config.get("ML_ANOMALY_THRESHOLD", 5.0)),
             max_flows=int(config.get("MAX_FLOWS_ML_SCORING", 50000)),
+            train_on_pcap_fallback=config.get("ML_TRAIN_ON_PCAP_FALLBACK", False),
         )
 
-    def run(self, analysis_id: str, flows: list, arp_events: list, observables: list) -> list[Finding]:
-        findings = []
-        flow_dicts = [f.to_dict() if hasattr(f, "to_dict") else f for f in flows]
-        db_flows = Flow.query.filter_by(analysis_id=analysis_id).all()
-        flow_by_key = {
-            (f.src_ip, f.dst_ip, f.src_port, f.dst_port, f.protocol): f for f in db_flows
-        }
+    def run(
+        self,
+        analysis_id: str,
+        flows: list,
+        arp_events: list,
+        observables: list,
+        progress_cb=None,
+    ) -> list[Finding]:
+        """progress_cb(pct, message) receives 0-100 progress within detection."""
 
+        def report(pct, message):
+            if progress_cb:
+                progress_cb(pct, message)
+
+        findings = []
+        db_flows = Flow.query.filter_by(analysis_id=analysis_id).all()
+
+        report(2, f"Applying whitelist to {len(db_flows):,} flows...")
         for flow in db_flows:
             fd = flow.to_dict()
             if self.config.get("WHITELIST_ENABLED", True):
@@ -91,8 +106,13 @@ class DetectionEngine:
 
         active_flows = [f for f in db_flows if not f.is_whitelisted]
 
-        for rule in self.rules:
+        total_rules = max(1, len(self.rules))
+        for rule_idx, rule in enumerate(self.rules):
             rule_id = rule.get("id", "")
+            report(
+                5 + int(rule_idx * 35 / total_rules),
+                f"Rule {rule_idx + 1}/{total_rules}: {rule.get('name', rule_id)}...",
+            )
             try:
                 triggered = self._evaluate_rule(rule, active_flows, arp_events, observables)
                 for item in triggered:
@@ -114,19 +134,23 @@ class DetectionEngine:
             except Exception as exc:
                 logger.warning("Rule %s failed: %s", rule_id, exc)
 
+        report(40, f"ML scoring {len(active_flows):,} flows (Isolation Forest)...")
         ml_input = []
         for f in active_flows:
             d = f.to_dict()
             d["id"] = f.id
             d["start_time"] = f.start_time
-            d["iat_mean"] = 0
-            d["iat_std"] = 0
-            d["is_external_dst"] = not self._is_private(f.dst_ip)
             ml_input.append(d)
 
-        ml_results = self.ml.score_flows(ml_input)
+        ml_results = self.ml.score_flows(
+            ml_input,
+            progress_callback=lambda pct: report(
+                40 + int(pct * 0.5), f"ML scoring... {pct}% of flows"
+            ),
+        )
+        flows_by_id = {f.id: f for f in active_flows}
         for result in ml_results:
-            flow = next((f for f in active_flows if f.id == result["flow_id"]), None)
+            flow = flows_by_id.get(result["flow_id"])
             if flow:
                 flow.anomaly_score = result["anomaly_score"]
             if result["flagged"]:
@@ -147,7 +171,70 @@ class DetectionEngine:
                     )
                 )
 
+        report(92, "Correlating ML anomalies with threat intel...")
+        findings.extend(self._add_ti_correlation_findings(analysis_id, findings, observables))
+        self._apply_hybrid_severity(active_flows, findings)
+        report(100, f"Detection complete — {len(findings)} findings")
+
         return findings
+
+    def _add_ti_correlation_findings(self, analysis_id: str, findings: list, observables: list) -> list:
+        """Elevate findings when ML flags align with malicious threat intel."""
+        correlated = []
+        ml_flow_ids = {
+            f.flow_id
+            for f in findings
+            if f.source == "ml" and f.flow_id and not getattr(f, "is_false_positive", False)
+        }
+        if not ml_flow_ids:
+            return correlated
+
+        malicious_values = {
+            o.value for o in observables if getattr(o, "is_malicious", False)
+        }
+        if not malicious_values:
+            return correlated
+
+        for flow_id in ml_flow_ids:
+            flow = Flow.query.get(flow_id)
+            if not flow:
+                continue
+            hits = {flow.src_ip, flow.dst_ip} & malicious_values
+            if not hits:
+                continue
+            correlated.append(
+                Finding(
+                    analysis_id=analysis_id,
+                    flow_id=flow_id,
+                    rule_id="TI-CORR-001",
+                    source="ti_correlation",
+                    title="TI Correlation — ML anomaly on malicious indicator",
+                    description=f"ML anomaly correlated with threat intel for: {', '.join(hits)}",
+                    severity="high",
+                    severity_score=9.0,
+                    evidence={
+                        "malicious_indicators": list(hits),
+                        "anomaly_score": flow.anomaly_score,
+                    },
+                    mitre_tactic="TA0011 - Command and Control",
+                    mitre_technique="T1071 - Application Layer Protocol",
+                    recommendation="Prioritize investigation; indicator flagged by external threat intelligence.",
+                )
+            )
+        return correlated
+
+    def _apply_hybrid_severity(self, flows: list, findings: list) -> None:
+        findings_by_flow: dict[str, list] = defaultdict(list)
+        for f in findings:
+            if f.flow_id:
+                findings_by_flow[f.flow_id].append(f)
+
+        for flow in flows:
+            flow_findings = findings_by_flow.get(flow.id, [])
+            flow.severity_score = compute_hybrid_flow_severity(
+                flow.anomaly_score or 0,
+                flow_findings,
+            )
 
     def _evaluate_rule(self, rule, flows, arp_events, observables):
         rule_id = rule.get("id", "")
