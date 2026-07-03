@@ -1,0 +1,54 @@
+%YAML 1.1
+---
+# packetEye bundled Suricata config (used when /etc/suricata/suricata.yaml is absent).
+# Prefer setting SURICATA_CONFIG_PATH=/etc/suricata/suricata.yaml on Kali/Linux.
+
+default-log-dir: .
+
+vars:
+  address-groups:
+    HOME_NET: "[192.168.0.0/16,10.0.0.0/8,172.16.0.0/12,127.0.0.0/8]"
+    EXTERNAL_NET: "!$HOME_NET"
+  port-groups:
+    HTTP_PORTS: "80"
+    SHELLCODE_PORTS: "!80"
+    ORACLE_PORTS: "1521"
+    SSH_PORTS: "22"
+    DNP3_PORTS: "20000"
+    FTP_PORTS: "21"
+    GENEVE_PORTS: "6081"
+    VXLAN_PORTS: "4789"
+    TEREDO_PORTS: "3544"
+
+outputs:
+  - eve-log:
+      enabled: yes
+      filetype: regular
+      filename: eve.json
+      types:
+        - flow
+        - alert
+        - dns
+        - http
+        - tls
+        - anomaly
+
+logging:
+  default-log-level: notice
+
+af-packet:
+  - interface: default
+    cluster-id: 99
+    cluster-type: cluster_flow
+    defrag: yes
+    use-mmap: yes
+    tpacket-v3: yes
+
+detect:
+  profile: medium
+
+# Stock rules optional — packetEye loads deploy/suricata/custom.rules via -S
+default-rule-path: /etc/suricata/rules
+rule-files: []
+
+sensor-name: packeteye
