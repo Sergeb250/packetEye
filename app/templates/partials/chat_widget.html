@@ -1,0 +1,36 @@
+{# SOC AI assistant — available on every page. Passes the current analysis
+   context when the page has one (report / progress pages set `analysis`). #}
+{% if config.get('CHATBOT_ENABLED', True) %}
+<button id="chatFab" class="btn btn-info rounded-circle chat-fab" title="Ask the SOC AI assistant">
+    <i class="bi bi-robot"></i>
+</button>
+<div class="offcanvas offcanvas-end" tabindex="-1" id="chatPanel" style="width: 420px;"
+     data-analysis-id="{{ analysis.id if analysis is defined and analysis else '' }}">
+    <div class="offcanvas-header border-bottom">
+        <h5 class="offcanvas-title"><i class="bi bi-robot text-info"></i> SOC AI Assistant</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
+    </div>
+    <div class="offcanvas-body d-flex flex-column p-0">
+        <div id="chatMessages" class="flex-grow-1 overflow-auto p-3">
+            <div class="chat-msg chat-ai">
+                <div class="chat-bubble">
+                    Ask me about findings, severity, MITRE mapping, or "what should I do next?".
+                    I only use analysis metadata — never raw packets.
+                </div>
+            </div>
+        </div>
+        <div class="border-top p-2">
+            <div class="d-flex flex-wrap gap-1 mb-2" id="chatSuggestions">
+                <button class="btn btn-outline-secondary btn-sm chat-suggest">Summarize the top risks</button>
+                <button class="btn btn-outline-secondary btn-sm chat-suggest">What should I do first?</button>
+                <button class="btn btn-outline-secondary btn-sm chat-suggest">Explain the ML anomalies</button>
+            </div>
+            <form id="chatForm" class="d-flex gap-2">
+                <input type="text" id="chatInput" class="form-control form-control-sm"
+                       placeholder="Ask the SOC assistant…" autocomplete="off">
+                <button type="submit" class="btn btn-info btn-sm" id="chatSend"><i class="bi bi-send"></i></button>
+            </form>
+        </div>
+    </div>
+</div>
+{% endif %}

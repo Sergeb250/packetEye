@@ -1,15 +1,15 @@
 {% extends "base.html" %}
 {% block title %}Upload{% endblock %}
 {% block content %}
-<div class="text-center mb-5">
-    <h1 class="display-4 fw-bold">packetEye</h1>
-    <p class="lead text-secondary">AI-Powered Network Forensics &amp; Threat Hunting</p>
-    <p class="text-muted">Upload PCAP captures for automated flow reconstruction, threat enrichment, and analyst-grade intelligence.</p>
+<div class="dashboard-hero mb-4 text-center">
+    <h1 class="display-5 fw-bold mb-2"><i class="bi bi-shield-check text-info"></i> packetEye</h1>
+    <p class="lead text-secondary mb-1">AI-Powered Network Forensics &amp; Threat Hunting</p>
+    <p class="text-muted small mb-0">Upload PCAP captures for flow reconstruction, ML anomaly detection, and analyst-grade intelligence.</p>
 </div>
 
 <div class="row justify-content-center">
     <div class="col-lg-8">
-        <div class="card bg-black border-secondary">
+        <div class="card">
             <div class="card-body p-4">
                 <form id="uploadForm" enctype="multipart/form-data">
                     <div id="dropZone" class="drop-zone mb-4">
@@ -20,13 +20,28 @@
                         <button type="button" class="btn btn-outline-info btn-sm" onclick="document.getElementById('fileInput').click()">Browse Files</button>
                     </div>
                     <div id="fileInfo" class="alert alert-secondary d-none"></div>
+
+                    <div id="uploadProgress" class="d-none mb-4">
+                        <div class="d-flex justify-content-between small mb-1">
+                            <span id="uploadPhase" class="text-info">Uploading PCAP file...</span>
+                            <span id="uploadPct" class="fw-bold">0%</span>
+                        </div>
+                        <div class="progress" style="height: 22px;">
+                            <div id="uploadBar" class="progress-bar progress-bar-striped progress-bar-animated bg-info" style="width: 0%"></div>
+                        </div>
+                        <p class="small text-muted mt-2 mb-0">
+                            <i class="bi bi-info-circle"></i>
+                            Only the file is uploaded now. Parsing and analysis run on the next page.
+                        </p>
+                    </div>
+
                     <div class="mb-3">
                         <label class="form-label">Analysis Name (optional)</label>
-                        <input type="text" class="form-control bg-dark text-light border-secondary" name="analysis_name" id="analysisName">
+                        <input type="text" class="form-control" name="analysis_name" id="analysisName">
                     </div>
                     <div class="mb-3">
                         <label class="form-label">Analyst Notes (optional)</label>
-                        <textarea class="form-control bg-dark text-light border-secondary" name="analyst_notes" rows="2" id="analystNotes"></textarea>
+                        <textarea class="form-control" name="analyst_notes" rows="2" id="analystNotes"></textarea>
                     </div>
                     <button type="submit" class="btn btn-info w-100" id="submitBtn" disabled>
                         <i class="bi bi-play-fill"></i> Start Analysis

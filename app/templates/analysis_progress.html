@@ -1,60 +1,99 @@
 {% extends "base.html" %}
 {% block title %}Analysis Progress{% endblock %}
 {% block content %}
-<h2 class="mb-4">Analyzing: {{ analysis.filename }}</h2>
-<div class="card bg-black border-secondary mb-4">
+<div class="dashboard-hero mb-4">
+    <div class="d-flex flex-wrap justify-content-between align-items-start gap-2">
+        <div>
+            <h2 class="mb-1"><i class="bi bi-hourglass-split text-info"></i> Analysis in Progress</h2>
+            <p class="text-muted mb-0 small text-truncate" style="max-width:520px" title="{{ analysis.filename }}">{{ analysis.filename }}</p>
+        </div>
+        <span id="statusBadge" class="badge bg-secondary fs-6">{{ analysis.status|upper }}</span>
+    </div>
+</div>
+
+<div class="card mb-4">
     <div class="card-body">
-        <div class="d-flex justify-content-between mb-2">
-            <span id="statusLabel" class="text-info fw-bold">{{ analysis.status|upper }}</span>
-            <span id="progressPct">{{ analysis.progress_pct }}%</span>
+        <div class="d-flex justify-content-between align-items-center mb-2">
+            <span id="statusLabel" class="text-info fw-bold">{{ analysis.status|replace('_', ' ')|title }}</span>
+            <span id="progressPct" class="fw-bold">{{ analysis.progress_pct }}%</span>
         </div>
-        <div class="progress mb-3" style="height: 24px;">
-            <div id="progressBar" class="progress-bar progress-bar-striped progress-bar-animated bg-info" style="width: {{ analysis.progress_pct }}%"></div>
+        <div class="progress mb-2" style="height: 26px;">
+            <div id="progressBar" class="progress-bar progress-bar-striped progress-bar-animated bg-info"
+                 style="width: {{ analysis.progress_pct }}%"></div>
         </div>
-        <div class="d-flex justify-content-between text-muted small stage-labels">
-            <span>Parsing</span><span>Enriching</span><span>Detecting</span><span>AI Analysis</span><span>Done</span>
+        <p id="progressMessage" class="small text-muted mb-4">
+            {{ (analysis.summary_json or {}).get('progress_message', 'Waiting to start...') }}
+        </p>
+
+        <div class="pipeline-steps" id="pipelineSteps">
+            <div class="pipeline-step" data-step="queued">
+                <div class="step-icon"><i class="bi bi-cloud-upload"></i></div>
+                <div class="step-label">Queued</div>
+            </div>
+            <div class="pipeline-step" data-step="parsing">
+                <div class="step-icon"><i class="bi bi-file-earmark-binary"></i></div>
+                <div class="step-label">Parsing PCAP</div>
+            </div>
+            <div class="pipeline-step" data-step="enriching">
+                <div class="step-icon"><i class="bi bi-globe2"></i></div>
+                <div class="step-label">Enriching</div>
+            </div>
+            <div class="pipeline-step" data-step="analyzing">
+                <div class="step-icon"><i class="bi bi-shield-exclamation"></i></div>
+                <div class="step-label">Detecting</div>
+            </div>
+            <div class="pipeline-step" data-step="complete">
+                <div class="step-icon"><i class="bi bi-check-lg"></i></div>
+                <div class="step-label">Complete</div>
+            </div>
         </div>
     </div>
 </div>
+
 <div class="row g-3 mb-4">
-    <div class="col-md-4"><div class="stat-card"><div class="stat-value" id="statFlows">{{ analysis.total_flows or 0 }}</div><div class="stat-label">Flows</div></div></div>
-    <div class="col-md-4"><div class="stat-card"><div class="stat-value" id="statFindings">{{ analysis.total_findings or 0 }}</div><div class="stat-label">Findings</div></div></div>
-    <div class="col-md-4"><div class="stat-card"><div class="stat-value" id="statRisk">{{ '%.1f'|format(analysis.risk_score or 0) }}</div><div class="stat-label">Risk Score</div></div></div>
+    <div class="col-md-4">
+        <div class="kpi-card">
+            <div class="kpi-icon text-info"><i class="bi bi-diagram-3"></i></div>
+            <div class="kpi-value" id="statFlows">{{ analysis.total_flows or 0 }}</div>
+            <div class="kpi-label">Flows extracted</div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="kpi-card">
+            <div class="kpi-icon text-warning"><i class="bi bi-exclamation-triangle"></i></div>
+            <div class="kpi-value text-warning" id="statFindings">{{ analysis.total_findings or 0 }}</div>
+            <div class="kpi-label">Findings</div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="kpi-card">
+            <div class="kpi-icon text-danger"><i class="bi bi-speedometer2"></i></div>
+            <div class="kpi-value" id="statRisk">{{ '%.1f'|format(analysis.risk_score or 0) }}</div>
+            <div class="kpi-label">Risk score</div>
+        </div>
+    </div>
 </div>
+
 <div id="completeActions" class="{% if analysis.status != 'complete' %}d-none{% endif %}">
-    <a href="{{ url_for('main.report', analysis_id=analysis.id) }}" class="btn btn-info btn-lg"><i class="bi bi-file-earmark-text"></i> View Report</a>
+    <a href="{{ url_for('main.report', analysis_id=analysis.id) }}" class="btn btn-info btn-lg">
+        <i class="bi bi-file-earmark-text"></i> View Report
+    </a>
+    <a href="{{ url_for('main.dashboard') }}" class="btn btn-outline-secondary btn-lg ms-2">Dashboard</a>
 </div>
-<div id="errorBox" class="alert alert-danger {% if analysis.status != 'failed' %}d-none{% endif %}">{{ analysis.error_message or '' }}</div>
+
+<div id="errorBox" class="alert alert-danger border-danger {% if analysis.status != 'failed' %}d-none{% endif %}">
+    <i class="bi bi-x-circle"></i> <span id="errorText">{{ analysis.error_message or '' }}</span>
+</div>
+
+<div id="waitingNote" class="alert alert-info {% if analysis.status in ['complete', 'failed'] %}d-none{% endif %}">
+    <i class="bi bi-info-circle"></i>
+    Analysis runs in the background — you can leave this page open to watch progress.
+    Large PCAP files may take several minutes.
+</div>
 {% endblock %}
 {% block scripts %}
+<script src="{{ url_for('static', filename='js/analysis_progress.js') }}"></script>
 <script>
-const analysisId = '{{ analysis.id }}';
-const pollInterval = 3000;
-
-async function pollStatus() {
-    const resp = await fetch(`/api/analysis/${analysisId}/status`);
-    const data = await resp.json();
-    document.getElementById('statusLabel').textContent = data.status.toUpperCase();
-    document.getElementById('progressPct').textContent = data.progress_pct + '%';
-    document.getElementById('progressBar').style.width = data.progress_pct + '%';
-    document.getElementById('statFlows').textContent = data.total_flows || 0;
-    document.getElementById('statFindings').textContent = data.total_findings || 0;
-    document.getElementById('statRisk').textContent = (data.risk_score || 0).toFixed(1);
-
-    if (data.status === 'complete') {
-        document.getElementById('completeActions').classList.remove('d-none');
-        document.getElementById('progressBar').classList.remove('progress-bar-animated');
-        return;
-    }
-    if (data.status === 'failed') {
-        document.getElementById('errorBox').textContent = data.error_message || 'Analysis failed';
-        document.getElementById('errorBox').classList.remove('d-none');
-        return;
-    }
-    setTimeout(pollStatus, pollInterval);
-}
-if ('{{ analysis.status }}' !== 'complete' && '{{ analysis.status }}' !== 'failed') {
-    setTimeout(pollStatus, pollInterval);
-}
+    initAnalysisProgress('{{ analysis.id }}', '{{ analysis.status }}');
 </script>
 {% endblock %}
