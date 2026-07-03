@@ -502,17 +502,23 @@ Rules are loaded by `app/services/detection/rules.py` → `load_rules()` which r
 
 Unsupervised — no labeled malware required. Flows that are "easy to isolate" in feature space are anomalous.
 
-### Feature vector (11 dimensions)
+### Feature vector (20 dimensions, schema v3)
+
+Shared contract in `app/services/detection/features.py` — identical for CIC-IDS2017
+training, PCAP analysis, and Suricata live flows.
 
 | Feature | Transform |
 |---------|-----------|
-| `bytes_total_log` | log1p(bytes_sent + bytes_recv) |
-| `packets_total` | Raw count |
-| `duration_ms_log` | log1p(duration) |
-| `bytes_per_packet` | bytes / packets |
-| `iat_mean`, `iat_std` | Inter-arrival time stats |
 | `dst_port` | Raw port number |
-| `dst_port_entropy` | Entropy of ports accessed by src IP |
+| `duration_ms_log` | log1p(duration in ms) |
+| `fwd_packets`, `bwd_packets` | Directional packet counts |
+| `fwd_bytes_log`, `bwd_bytes_log` | log1p(directional bytes) |
+| `flow_bytes_per_s`, `flow_packets_per_s` | Throughput rates |
+| `fwd_pkt_len_mean`, `bwd_pkt_len_mean` | Mean packet size per direction |
+| `pkt_size_avg` | Mean packet size overall |
+| `down_up_ratio` | bwd packets / fwd packets |
+| `iat_mean`, `iat_std`, `iat_max`, `fwd_iat_mean` | Inter-arrival time stats (seconds) |
+| `dst_port_entropy` | Entropy of ports accessed by src IP (rolling window in live mode) |
 | `is_external_dst` | 1 if dst not RFC1918 |
 | `time_of_day_hour` | 0–23 |
 | `protocol_encoded` | TCP=1, UDP=2, ICMP=3 |
@@ -521,15 +527,25 @@ Unsupervised — no labeled malware required. Flows that are "easy to isolate" i
 
 | Method | Description |
 |--------|-------------|
-| `score_flows(flows)` | Builds feature matrix, runs Isolation Forest, returns scores + explanations |
+| `score_flows(flows)` | Builds feature matrix, runs Isolation Forest, returns calibrated scores + explanations |
 | `_simple_explanations(features_df, scores)` | Text: "flagged due to unusual {feature}" |
 
 ### Training modes
 
-1. **No baseline model** — fits Isolation Forest on first 80% of flows in the capture
+1. **No baseline model** — fits Isolation Forest on first 80% of flows in the capture (dev only, `ML_TRAIN_ON_PCAP_FALLBACK=true`)
 2. **Pre-trained** — loads `ml_models/isolation_forest_base.pkl` if present
 
-Scores normalized from Isolation Forest range (-1, 0) to **0–10** via `normalize_if_score()`. Flows above `ML_ANOMALY_THRESHOLD` (default 7.5) create `Finding` with `source='ml'`.
+### Score calibration
+
+Raw `decision_function` output is mapped to a **0–10** scale via `ScoreCalibrator`
+using bounds saved at training time (`ml_models/score_calibration.json`):
+
+- **5.0** = the model's decision boundary (`predict() == -1` starts here)
+- **0** = most normal benign training flow, **10** = extreme anomaly
+
+Flows scoring at or above `ML_ANOMALY_THRESHOLD` (default **5.0**) create a `Finding`
+with `source='ml'`. Tune the threshold with `python scripts/tune_threshold.py`, which
+sweeps 3.0–9.0 and recommends the best-F1 point with the benign FP rate capped at 10%.
 
 ---
 
@@ -714,7 +730,7 @@ CACHE_TYPE=SimpleCache
 | `LLM_PROVIDER` | `nvidia` | `nvidia`, `openai`, or `anthropic` |
 | `NVIDIA_API_KEY` | — | `nvapi-...` from build.nvidia.com |
 | `LLM_MODEL` | `deepseek-ai/deepseek-v4-pro` | Or `deepseek-ai/deepseek-v4-flash` |
-| `ML_ANOMALY_THRESHOLD` | `7.5` | Flows scoring above this create ML findings |
+| `ML_ANOMALY_THRESHOLD` | `5.0` | Flows scoring above this create ML findings (5.0 = IF decision boundary; tune with `scripts/tune_threshold.py`) |
 | `MAX_UPLOAD_MB` | `500` | Upload size limit |
 | `WHITELIST_ENABLED` | `true` | Toggle whitelist filtering |
 
@@ -748,6 +764,46 @@ celery -A celery_worker.celery_app worker --loglevel=info
 
 ```powershell
 pytest tests/ -v
+```
+
+---
+
+## 19. NIDS Integration (Isolation Forest + Suricata Live)
+
+packetEye now supports a full NIDS workflow alongside PCAP forensics:
+
+| Mode | Path |
+|------|------|
+| **Offline training** | `python scripts/train_baseline.py` — CIC-IDS2017 Monday BENIGN |
+| **Evaluation** | `python scripts/evaluate_model.py` — Tue–Fri metrics |
+| **PCAP analysis** | Existing upload pipeline uses baseline model + scaler |
+| **Live monitoring** | Suricata EVE → `/api/live/start` → Live Monitor UI |
+
+### ML artifacts (`ml_models/`)
+
+| File | Purpose |
+|------|---------|
+| `isolation_forest_base.pkl` | Trained Isolation Forest |
+| `feature_scaler.pkl` | MinMaxScaler fit on Monday BENIGN |
+| `feature_schema.json` | 16-feature column order |
+| `benchmark_results.json` | CIC evaluation metrics |
+
+### Live API
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| POST | `/api/live/start` | Start Suricata EVE consumer |
+| POST | `/api/live/stop` | Stop live session |
+| GET | `/api/live/status?session_id=` | Session stats |
+| GET | `/api/live/alerts?session_id=` | Recent ML alerts |
+| GET | `/api/ml/benchmark` | CIC benchmark JSON |
+
+See [docs/NIDS_SETUP.md](docs/NIDS_SETUP.md) and [docs/SURICATA_SETUP.md](docs/SURICATA_SETUP.md).
+
+### Database migration (existing installs)
+
+```powershell
+python scripts/migrate_db.py
 ```
 
 ---
