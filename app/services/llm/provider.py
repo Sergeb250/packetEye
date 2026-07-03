@@ -8,15 +8,22 @@ import time
 logger = logging.getLogger(__name__)
 
 
+# Hard cap per API attempt. Without this the OpenAI SDK waits up to 600s per
+# attempt (with 2 internal retries) — an unreachable LLM stalls the whole
+# analysis pipeline for hours.
+DEFAULT_TIMEOUT_SECONDS = 45
+
+
 class LLMProvider:
     def complete(self, system_prompt: str, user_prompt: str, temperature: float = 0.2) -> str:
         raise NotImplementedError
 
 
 class OpenAIProvider(LLMProvider):
-    def __init__(self, api_key: str, model: str = "gpt-4o"):
+    def __init__(self, api_key: str, model: str = "gpt-4o", timeout: float = DEFAULT_TIMEOUT_SECONDS):
         self.api_key = api_key
         self.model = model
+        self.timeout = timeout
 
     def complete(self, system_prompt: str, user_prompt: str, temperature: float = 0.2) -> str:
         if not self.api_key:
@@ -24,7 +31,7 @@ class OpenAIProvider(LLMProvider):
         try:
             from openai import OpenAI
 
-            client = OpenAI(api_key=self.api_key)
+            client = OpenAI(api_key=self.api_key, timeout=self.timeout, max_retries=1)
             response = client.chat.completions.create(
                 model=self.model,
                 messages=[
@@ -51,11 +58,13 @@ class NVIDIAProvider(LLMProvider):
         model: str | None = None,
         base_url: str | None = None,
         max_tokens: int = 2048,
+        timeout: float = DEFAULT_TIMEOUT_SECONDS,
     ):
         self.api_key = api_key
         self.model = model or self.DEFAULT_MODEL
         self.base_url = base_url or self.DEFAULT_BASE_URL
         self.max_tokens = max_tokens
+        self.timeout = timeout
 
     def complete(self, system_prompt: str, user_prompt: str, temperature: float = 0.2) -> str:
         if not self.api_key:
@@ -63,7 +72,10 @@ class NVIDIAProvider(LLMProvider):
         try:
             from openai import OpenAI
 
-            client = OpenAI(base_url=self.base_url, api_key=self.api_key)
+            client = OpenAI(
+                base_url=self.base_url, api_key=self.api_key,
+                timeout=self.timeout, max_retries=1,
+            )
             # Disable DeepSeek V4 "thinking" mode for reliable JSON output
             extra_body = {"chat_template_kwargs": {"thinking": False}}
             response = client.chat.completions.create(
@@ -83,9 +95,10 @@ class NVIDIAProvider(LLMProvider):
 
 
 class AnthropicProvider(LLMProvider):
-    def __init__(self, api_key: str, model: str = "claude-sonnet-4-6"):
+    def __init__(self, api_key: str, model: str = "claude-sonnet-4-6", timeout: float = DEFAULT_TIMEOUT_SECONDS):
         self.api_key = api_key
         self.model = model
+        self.timeout = timeout
 
     def complete(self, system_prompt: str, user_prompt: str, temperature: float = 0.2) -> str:
         if not self.api_key:
@@ -93,7 +106,7 @@ class AnthropicProvider(LLMProvider):
         try:
             import anthropic
 
-            client = anthropic.Anthropic(api_key=self.api_key)
+            client = anthropic.Anthropic(api_key=self.api_key, timeout=self.timeout, max_retries=1)
             response = client.messages.create(
                 model=self.model,
                 max_tokens=2048,
@@ -113,14 +126,13 @@ def get_provider(config: dict) -> LLMProvider:
     model = config.get("LLM_MODEL", NVIDIAProvider.DEFAULT_MODEL)
     base_url = config.get("NVIDIA_API_BASE", NVIDIAProvider.DEFAULT_BASE_URL)
     max_tokens = int(config.get("LLM_MAX_TOKENS", 2048))
+    timeout = float(config.get("LLM_TIMEOUT_SECONDS", DEFAULT_TIMEOUT_SECONDS))
 
     if provider == "anthropic":
-        return AnthropicProvider(api_key, model)
+        return AnthropicProvider(api_key, model, timeout=timeout)
     if provider == "openai":
-        return OpenAIProvider(api_key, model)
-    if provider == "nvidia":
-        return NVIDIAProvider(api_key, model, base_url, max_tokens)
-    return NVIDIAProvider(api_key, model, base_url, max_tokens)
+        return OpenAIProvider(api_key, model, timeout=timeout)
+    return NVIDIAProvider(api_key, model, base_url, max_tokens, timeout=timeout)
 
 
 def parse_json_response(text: str) -> dict:
@@ -137,11 +149,12 @@ def parse_json_response(text: str) -> dict:
     return {}
 
 
-def complete_with_retry(provider: LLMProvider, system: str, user: str, temperature: float = 0.2, retries: int = 3) -> dict:
+def complete_with_retry(provider: LLMProvider, system: str, user: str, temperature: float = 0.2, retries: int = 2) -> dict:
     for attempt in range(retries):
         raw = provider.complete(system, user, temperature)
         parsed = parse_json_response(raw)
         if parsed:
             return parsed
-        time.sleep(2 ** attempt)
+        if attempt < retries - 1:
+            time.sleep(1)
     return {}

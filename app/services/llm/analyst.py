@@ -20,12 +20,15 @@ SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
 
 
 class LLMAnalyst:
+    MAX_CONSECUTIVE_FAILURES = 2
+
     def __init__(self, config: dict):
         self.config = config
         self.provider = get_provider(config)
         self.max_calls = int(config.get("LLM_MAX_CALLS_PER_ANALYSIS", 25))
         self.enabled = config.get("LLM_ENABLED", True)
         self._call_count = 0
+        self._consecutive_failures = 0
 
     def _cache_key(self, prefix: str, data: str) -> str:
         h = hashlib.sha256(data.encode()).hexdigest()[:16]
@@ -46,25 +49,40 @@ class LLMAnalyst:
         self._call_count += 1
         result = complete_with_retry(self.provider, system, user, temperature)
         if result:
+            self._consecutive_failures = 0
             try:
                 cache.set(key, json.dumps(result), timeout=86400)
             except Exception:
                 pass
+        else:
+            # Circuit breaker: a dead/misconfigured LLM API must not stall the
+            # pipeline call after call — give up for this analysis.
+            self._consecutive_failures += 1
+            if self._consecutive_failures >= self.MAX_CONSECUTIVE_FAILURES:
+                logger.warning(
+                    "LLM provider failed %s times in a row — skipping remaining AI enrichment",
+                    self._consecutive_failures,
+                )
+                self.enabled = False
         logger.info("LLM call %s/%s: %s", self._call_count, self.max_calls, prefix)
         return result
 
-    def enrich_findings(self, analysis_id: str) -> int:
+    def enrich_findings(self, analysis_id: str, progress_cb=None) -> int:
         findings = (
             Finding.query.filter_by(analysis_id=analysis_id, is_false_positive=False)
-            .order_by(Finding.severity)
+            .order_by(Finding.severity_score.desc())
             .all()
         )
+        candidates = [
+            f for f in findings
+            if SEVERITY_ORDER.get(f.severity, 5) <= SEVERITY_ORDER["medium"]
+        ][: self.max_calls]
         enriched = 0
-        for finding in findings:
-            if SEVERITY_ORDER.get(finding.severity, 5) > SEVERITY_ORDER["medium"]:
-                continue
-            if self._call_count >= self.max_calls:
+        for idx, finding in enumerate(candidates):
+            if not self.enabled or self._call_count >= self.max_calls:
                 break
+            if progress_cb:
+                progress_cb(idx + 1, len(candidates))
 
             evidence = json.dumps(finding.evidence or {}, default=str)[:2000]
             enrichment = self._get_finding_enrichment(finding)
