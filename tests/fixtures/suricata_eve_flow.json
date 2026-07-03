@@ -1,0 +1,22 @@
+{
+  "timestamp": "2026-01-01T12:00:00.000000+0000",
+  "event_type": "flow",
+  "src_ip": "10.0.0.5",
+  "dest_ip": "8.8.8.8",
+  "src_port": 54321,
+  "dest_port": 443,
+  "proto": "TCP",
+  "flow_id": 1,
+  "flow": {
+    "pkts_toserver": 12,
+    "pkts_toclient": 10,
+    "bytes_toserver": 2400,
+    "bytes_toclient": 8000,
+    "start": "2026-01-01T12:00:00.000000+0000",
+    "end": "2026-01-01T12:00:05.000000+0000",
+    "age": 5,
+    "state": "closed",
+    "reason": "timeout",
+    "alerted": false
+  }
+}

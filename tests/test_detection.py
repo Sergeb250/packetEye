@@ -14,7 +14,10 @@ def engine():
         "DETECTION_RULES_DIR": base / "detection_rules",
         "WHITELIST_PATH": base / "whitelist" / "default_whitelist.yaml",
         "ML_MODEL_PATH": base / "ml_models" / "isolation_forest_base.pkl",
+        "ML_SCALER_PATH": base / "ml_models" / "feature_scaler.pkl",
+        "ML_FEATURE_SCHEMA_PATH": base / "ml_models" / "feature_schema.json",
         "ML_ANOMALY_THRESHOLD": 7.5,
+        "ML_TRAIN_ON_PCAP_FALLBACK": False,
         "MAX_FLOWS_ML_SCORING": 1000,
         "WHITELIST_ENABLED": True,
     }
