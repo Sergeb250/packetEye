@@ -1,8 +1,10 @@
 """VirusTotal API client."""
 
-import aiohttp
 import asyncio
 import logging
+import time
+
+import aiohttp
 
 logger = logging.getLogger(__name__)
 
@@ -12,12 +14,12 @@ class TokenBucket:
         self.rate = rate_per_minute / 60.0
         self.tokens = rate_per_minute
         self.max_tokens = rate_per_minute
-        self.last = asyncio.get_event_loop().time() if asyncio.get_event_loop().is_running() else 0
+        self.last = time.monotonic()
         self._lock = asyncio.Lock()
 
     async def acquire(self):
         async with self._lock:
-            now = asyncio.get_event_loop().time()
+            now = time.monotonic()
             elapsed = now - self.last
             self.tokens = min(self.max_tokens, self.tokens + elapsed * self.rate)
             self.last = now

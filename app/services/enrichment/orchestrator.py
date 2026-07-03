@@ -12,6 +12,12 @@ from app.extensions import cache, db
 from app.models.analysis import Observable
 from app.services.enrichment.abuseipdb import AbuseIPDBClient
 from app.services.enrichment.geo_asn import GeoASNClient
+from app.services.enrichment.osint_public import (
+    CrtShClient,
+    GreyNoiseClient,
+    OTXClient,
+    ShodanInternetDBClient,
+)
 from app.services.enrichment.virustotal import VirusTotalClient
 from app.services.enrichment.whois_lookup import WhoisClient
 
@@ -25,6 +31,11 @@ class EnrichmentOrchestrator:
         self.abuse = AbuseIPDBClient(self.config.get("ABUSEIPDB_API_KEY", ""))
         self.geo = GeoASNClient(self.config.get("MAXMIND_DB_PATH", ""))
         self.whois = WhoisClient()
+        # Keyless public OSINT (keys optional for higher rate limits)
+        self.internetdb = ShodanInternetDBClient()
+        self.otx = OTXClient(self.config.get("OTX_API_KEY", ""))
+        self.greynoise = GreyNoiseClient(self.config.get("GREYNOISE_API_KEY", ""))
+        self.crtsh = CrtShClient()
         self.cache_ttl = self.config.get("ENRICHMENT_CACHE_TTL_HOURS", 24) * 3600
 
     def _cache_key(self, provider: str, obs_type: str, value: str) -> str:
@@ -54,6 +65,9 @@ class EnrichmentOrchestrator:
             ("abuseipdb", self.abuse, "lookup_ip"),
             ("geo", self.geo, "lookup_ip"),
             ("whois", self.whois, "reverse_dns"),
+            ("internetdb", self.internetdb, "lookup_ip"),
+            ("otx", self.otx, "lookup_ip"),
+            ("greynoise", self.greynoise, "lookup_ip"),
         ]:
             cached = self._get_cached(provider, "ip", ip)
             if cached:
@@ -74,6 +88,8 @@ class EnrichmentOrchestrator:
         for provider, client, method in [
             ("virustotal", self.vt, "lookup_domain"),
             ("whois", self.whois, "lookup_domain"),
+            ("otx", self.otx, "lookup_domain"),
+            ("crtsh", self.crtsh, "lookup_domain"),
         ]:
             cached = self._get_cached(provider, "domain", domain)
             if cached:
@@ -111,6 +127,24 @@ class EnrichmentOrchestrator:
         if whois and whois.get("newly_registered"):
             malicious_signals += 1
             confidence += 0.25
+
+        otx = enrichment.get("otx", {})
+        if otx and "pulse_count" in otx:
+            total_signals += 1
+            if otx.get("pulse_count", 0) > 2:
+                malicious_signals += 1
+                confidence += 0.25
+
+        greynoise = enrichment.get("greynoise", {})
+        if greynoise.get("classification") == "malicious":
+            malicious_signals += 1
+            confidence += 0.3
+        elif greynoise.get("riot") or greynoise.get("classification") == "benign":
+            # Known-good business service / research scanner — dampen.
+            confidence = max(0.0, confidence - 0.2)
+
+        if enrichment.get("internetdb", {}).get("vulns"):
+            confidence += 0.1  # exposed vulnerable host — weak signal alone
 
         is_malicious = malicious_signals > 0
         confidence = min(1.0, confidence)
