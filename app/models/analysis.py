@@ -16,6 +16,7 @@ class Analysis(db.Model):
     file_path = db.Column(db.String(1024), nullable=False)
     analysis_name = db.Column(db.String(256))
     analyst_notes = db.Column(db.Text)
+    source = db.Column(db.String(16), default="pcap")  # pcap, live
     status = db.Column(
         db.String(32), default="queued", nullable=False
     )  # queued, parsing, enriching, analyzing, complete, failed
@@ -42,6 +43,7 @@ class Analysis(db.Model):
             "id": self.id,
             "filename": self.filename,
             "analysis_name": self.analysis_name,
+            "source": self.source or "pcap",
             "status": self.status,
             "progress_pct": self.progress_pct,
             "created_at": self.created_at.isoformat() if self.created_at else None,
@@ -51,6 +53,7 @@ class Analysis(db.Model):
             "risk_score": self.risk_score,
             "summary_json": self.summary_json or {},
             "error_message": self.error_message,
+            "progress_message": (self.summary_json or {}).get("progress_message"),
         }
 
 
@@ -86,6 +89,10 @@ class Flow(db.Model):
     rule_flags = db.Column(db.JSON, default=list)
     severity_score = db.Column(db.Float, default=0.0)
     is_whitelisted = db.Column(db.Boolean, default=False)
+    iat_mean = db.Column(db.Float, default=0.0)
+    iat_std = db.Column(db.Float, default=0.0)
+    iat_max = db.Column(db.Float, default=0.0)
+    fwd_iat_mean = db.Column(db.Float, default=0.0)
 
     findings = db.relationship("Finding", backref="flow", lazy="dynamic")
 
@@ -113,8 +120,22 @@ class Flow(db.Model):
             "anomaly_score": self.anomaly_score,
             "rule_flags": self.rule_flags or [],
             "is_whitelisted": self.is_whitelisted,
+            "iat_mean": self.iat_mean or 0.0,
+            "iat_std": self.iat_std or 0.0,
+            "iat_max": self.iat_max or 0.0,
+            "fwd_iat_mean": self.fwd_iat_mean or 0.0,
+            "is_external_dst": not self._is_private_dst(),
             "enrichment_json": self.enrichment_json or {},
         }
+
+    def _is_private_dst(self) -> bool:
+        import ipaddress
+
+        try:
+            ip = ipaddress.ip_address(self.dst_ip)
+            return ip.is_private or ip.is_loopback or ip.is_link_local
+        except ValueError:
+            return False
 
 
 class Observable(db.Model):
