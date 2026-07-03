@@ -8,3 +8,6 @@ __pycache__/
 venv/
 .pytest_cache/
 ml_models/*.pkl
+CIC-IDS2017/
+.cursor/
+.claude/

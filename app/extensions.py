@@ -8,7 +8,9 @@ from flask_sqlalchemy import SQLAlchemy
 db = SQLAlchemy()
 cache = Cache()
 login_manager = LoginManager()
-limiter = Limiter(key_func=get_remote_address, default_limits=[])
+# In-memory rate-limit storage: fine for a single-process sensor, no Redis
+# needed. Override with RATELIMIT_STORAGE_URI in .env for multi-worker prod.
+limiter = Limiter(key_func=get_remote_address, default_limits=[], storage_uri="memory://")
 
 celery_app = Celery("packeteye")
 
