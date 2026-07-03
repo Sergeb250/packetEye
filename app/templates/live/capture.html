@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% block title %}Traffic Capture{% endblock %}
+{% block content %}
+<div class="dashboard-hero mb-4">
+    <h2 class="mb-1"><i class="bi bi-ethernet text-info"></i> Traffic Capture</h2>
+    <p class="text-muted mb-0 small">Start Suricata (rules + ML) or tcpdump (PCAP chunks) from the browser.</p>
+</div>
+{% include "partials/live_nav.html" %}
+
+<div class="card">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span>Capture controls</span>
+        <div class="d-flex gap-2 align-items-center">
+            <span class="badge bg-secondary" id="captureBadge">checking…</span>
+            <button id="btnCaptureRefresh" class="btn btn-outline-secondary btn-sm" type="button"><i class="bi bi-arrow-clockwise"></i></button>
+        </div>
+    </div>
+    <div class="card-body">
+        <div class="alert alert-info small">
+            <strong>Tip:</strong> Avoid <code>lo</code> (loopback). Pick <code>eth0</code>, <code>wlan0</code>, or your active interface.
+            On Kali run <code>sudo python run.py</code> for live capture.
+            tcpdump PCAP chunks go to <code>/tmp/packeteye/chunks-*</code> or <code>/var/log/packeteye/chunks</code> (not under <code>$HOME</code> — AppArmor blocks that).
+        </div>
+        <div class="row g-3 align-items-end">
+            <div class="col-md-3">
+                <label class="form-label small text-muted" for="captureMode">Capture mode</label>
+                <select id="captureMode" class="form-select form-select-sm">
+                    <option value="suricata" {% if live.capture_mode == 'suricata' %}selected{% endif %}>Suricata (rules + ML)</option>
+                    <option value="tcpdump" {% if live.capture_mode == 'tcpdump' %}selected{% endif %}>tcpdump (PCAP chunks)</option>
+                </select>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label small text-muted" for="captureIface">Interface</label>
+                <select id="captureIface" class="form-select form-select-sm"><option value="">Loading…</option></select>
+            </div>
+            <div class="col-md-6 d-flex flex-wrap gap-2">
+                <button id="btnCaptureStart" class="btn btn-success btn-sm" type="button" {% if not live.enabled %}disabled{% endif %}><i class="bi bi-record-circle"></i> Start capture</button>
+                <button id="btnCaptureStop" class="btn btn-danger btn-sm" type="button" disabled><i class="bi bi-stop-circle"></i> Stop capture</button>
+            </div>
+        </div>
+        <div class="row g-2 small mt-2">
+            <div class="col-6 col-md-3"><span class="text-muted">Mode</span><br><span id="capMode" class="fw-semibold">—</span></div>
+            <div class="col-6 col-md-3"><span class="text-muted">PID</span><br><span id="capPid" class="fw-semibold">—</span></div>
+            <div class="col-6 col-md-3"><span class="text-muted">tcpdump chunks</span><br><span id="capChunks" class="fw-semibold">—</span></div>
+            <div class="col-6 col-md-3"><span class="text-muted">Chunk watcher</span><br><span id="capWatcher" class="fw-semibold">—</span></div>
+        </div>
+        <div id="captureFeedback" class="small mt-2 d-none"></div>
+    </div>
+</div>
+
+<div class="card mt-4">
+    <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-2">
+        <span><i class="bi bi-eye text-info"></i> Live Capture View <span class="text-muted small fw-normal">— Wireshark-style</span></span>
+        <div class="d-flex flex-wrap align-items-center gap-2">
+            <span class="badge bg-secondary" id="liveFeedBadge">waiting</span>
+            <span class="small text-muted" id="livePktCount">0 rows</span>
+            <span class="small text-muted" id="livePktRate">0/s</span>
+            <input type="search" id="livePktFilter" class="form-control form-control-sm" style="width:160px" placeholder="Filter…">
+            <button type="button" id="btnPktPause" class="btn btn-outline-secondary btn-sm"><i class="bi bi-pause-fill"></i> Pause</button>
+            <button type="button" id="btnPktClear" class="btn btn-outline-secondary btn-sm"><i class="bi bi-trash"></i> Clear</button>
+            <label class="small mb-0 d-flex align-items-center gap-1">
+                <input type="checkbox" id="chkPktAutoscroll" class="form-check-input mt-0" checked> Auto-scroll
+            </label>
+        </div>
+    </div>
+    <div class="card-body p-0">
+        <div class="capture-live-legend small px-3 py-2 border-bottom d-flex flex-wrap gap-3">
+            <span><span class="legend-swatch pkt-legend-critical"></span> Critical / alert</span>
+            <span><span class="legend-swatch pkt-legend-high"></span> High risk</span>
+            <span><span class="legend-swatch pkt-legend-medium"></span> Medium / external</span>
+            <span><span class="legend-swatch pkt-legend-info"></span> Normal</span>
+        </div>
+        <div id="livePacketWrap" class="capture-live-wrap">
+            <table class="table table-sm table-hover capture-packet-table mb-0">
+                <thead class="sticky-top">
+                    <tr>
+                        <th>#</th>
+                        <th>Time</th>
+                        <th>Source</th>
+                        <th>Destination</th>
+                        <th>Proto</th>
+                        <th class="text-end">Len</th>
+                        <th>Info</th>
+                        <th>Risk</th>
+                    </tr>
+                </thead>
+                <tbody id="livePacketBody">
+                    <tr>
+                        <td colspan="8" class="empty-state text-center py-4 text-muted">
+                            <i class="bi bi-eye"></i> Start capture to see live packets and flows.
+                            Suricata shows EVE events; tcpdump shows raw packets via Scapy.
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<script id="live-monitor-data" type="application/json">{{ live | tojson }}</script>
+{% include "partials/action_modal.html" %}
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/live_common.js') }}"></script>
+<script src="{{ url_for('static', filename='js/live_capture.js') }}"></script>
+{% endblock %}
