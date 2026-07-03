@@ -1,0 +1,373 @@
+{
+  "evaluated_at": "2026-07-02T10:34:16.673469+00:00",
+  "note": "Evaluation uses a stratified sample of all labeled flows (all days).",
+  "overall": {
+    "split": "all_labeled",
+    "samples": 100000,
+    "attacks": 20000,
+    "benign": 80000,
+    "predicted_anomalies": 9369,
+    "accuracy": 0.85187,
+    "precision": 0.7768171629843099,
+    "recall": 0.3639,
+    "f1": 0.4956246382239777,
+    "confusion_matrix": [
+      [
+        77909,
+        2091
+      ],
+      [
+        12722,
+        7278
+      ]
+    ],
+    "classification_report": "              precision    recall  f1-score   support\n\n           0       0.86      0.97      0.91     80000\n           1       0.78      0.36      0.50     20000\n\n    accuracy                           0.85    100000\n   macro avg       0.82      0.67      0.70    100000\nweighted avg       0.84      0.85      0.83    100000\n"
+  },
+  "by_attack_label": {
+    "BENIGN": {
+      "split": "BENIGN",
+      "samples": 80000,
+      "attacks": 0,
+      "benign": 80000,
+      "predicted_anomalies": 2088,
+      "accuracy": 0.9739,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "confusion_matrix": [
+        [
+          77912,
+          2088
+        ],
+        [
+          0,
+          0
+        ]
+      ],
+      "classification_report": "              precision    recall  f1-score   support\n\n           0       1.00      0.97      0.99     80000\n           1       0.00      0.00      0.00         0\n\n    accuracy                           0.97     80000\n   macro avg       0.50      0.49      0.49     80000\nweighted avg       1.00      0.97      0.99     80000\n"
+    },
+    "Bot": {
+      "split": "Bot",
+      "samples": 65,
+      "attacks": 65,
+      "benign": 0,
+      "predicted_anomalies": 14,
+      "accuracy": 0.2153846153846154,
+      "precision": 1.0,
+      "recall": 0.2153846153846154,
+      "f1": 0.35443037974683544,
+      "confusion_matrix": [
+        [
+          0,
+          0
+        ],
+        [
+          51,
+          14
+        ]
+      ],
+      "classification_report": "              precision    recall  f1-score   support\n\n           0       0.00      0.00      0.00         0\n           1       1.00      0.22      0.35        65\n\n    accuracy                           0.22        65\n   macro avg       0.50      0.11      0.18        65\nweighted avg       1.00      0.22      0.35        65\n"
+    },
+    "DDoS": {
+      "split": "DDoS",
+      "samples": 4667,
+      "attacks": 4667,
+      "benign": 0,
+      "predicted_anomalies": 4040,
+      "accuracy": 0.865652453396186,
+      "precision": 1.0,
+      "recall": 0.865652453396186,
+      "f1": 0.9279889743884231,
+      "confusion_matrix": [
+        [
+          0,
+          0
+        ],
+        [
+          627,
+          4040
+        ]
+      ],
+      "classification_report": "              precision    recall  f1-score   support\n\n           0       0.00      0.00      0.00         0\n           1       1.00      0.87      0.93      4667\n\n    accuracy                           0.87      4667\n   macro avg       0.50      0.43      0.46      4667\nweighted avg       1.00      0.87      0.93      4667\n"
+    },
+    "DoS GoldenEye": {
+      "split": "DoS GoldenEye",
+      "samples": 363,
+      "attacks": 363,
+      "benign": 0,
+      "predicted_anomalies": 340,
+      "accuracy": 0.9366391184573003,
+      "precision": 1.0,
+      "recall": 0.9366391184573003,
+      "f1": 0.9672830725462305,
+      "confusion_matrix": [
+        [
+          0,
+          0
+        ],
+        [
+          23,
+          340
+        ]
+      ],
+      "classification_report": "              precision    recall  f1-score   support\n\n           0       0.00      0.00      0.00         0\n           1       1.00      0.94      0.97       363\n\n    accuracy                           0.94       363\n   macro avg       0.50      0.47      0.48       363\nweighted avg       1.00      0.94      0.97       363\n"
+    },
+    "DoS Hulk": {
+      "split": "DoS Hulk",
+      "samples": 8260,
+      "attacks": 8260,
+      "benign": 0,
+      "predicted_anomalies": 5243,
+      "accuracy": 0.6347457627118644,
+      "precision": 1.0,
+      "recall": 0.6347457627118644,
+      "f1": 0.7765681700362882,
+      "confusion_matrix": [
+        [
+          0,
+          0
+        ],
+        [
+          3017,
+          5243
+        ]
+      ],
+      "classification_report": "              precision    recall  f1-score   support\n\n           0       0.00      0.00      0.00         0\n           1       1.00      0.63      0.78      8260\n\n    accuracy                           0.63      8260\n   macro avg       0.50      0.32      0.39      8260\nweighted avg       1.00      0.63      0.78      8260\n"
+    },
+    "DoS Slowhttptest": {
+      "split": "DoS Slowhttptest",
+      "samples": 181,
+      "attacks": 181,
+      "benign": 0,
+      "predicted_anomalies": 169,
+      "accuracy": 0.9337016574585635,
+      "precision": 1.0,
+      "recall": 0.9337016574585635,
+      "f1": 0.9657142857142857,
+      "confusion_matrix": [
+        [
+          0,
+          0
+        ],
+        [
+          12,
+          169
+        ]
+      ],
+      "classification_report": "              precision    recall  f1-score   support\n\n           0       0.00      0.00      0.00         0\n           1       1.00      0.93      0.97       181\n\n    accuracy                           0.93       181\n   macro avg       0.50      0.47      0.48       181\nweighted avg       1.00      0.93      0.97       181\n"
+    },
+    "DoS slowloris": {
+      "split": "DoS slowloris",
+      "samples": 217,
+      "attacks": 217,
+      "benign": 0,
+      "predicted_anomalies": 179,
+      "accuracy": 0.8248847926267281,
+      "precision": 1.0,
+      "recall": 0.8248847926267281,
+      "f1": 0.9040404040404041,
+      "confusion_matrix": [
+        [
+          0,
+          0
+        ],
+        [
+          38,
+          179
+        ]
+      ],
+      "classification_report": "              precision    recall  f1-score   support\n\n           0       0.00      0.00      0.00         0\n           1       1.00      0.82      0.90       217\n\n    accuracy                           0.82       217\n   macro avg       0.50      0.41      0.45       217\nweighted avg       1.00      0.82      0.90       217\n"
+    },
+    "FTP-Patator": {
+      "split": "FTP-Patator",
+      "samples": 265,
+      "attacks": 265,
+      "benign": 0,
+      "predicted_anomalies": 124,
+      "accuracy": 0.4679245283018868,
+      "precision": 1.0,
+      "recall": 0.4679245283018868,
+      "f1": 0.6375321336760925,
+      "confusion_matrix": [
+        [
+          0,
+          0
+        ],
+        [
+          141,
+          124
+        ]
+      ],
+      "classification_report": "              precision    recall  f1-score   support\n\n           0       0.00      0.00      0.00         0\n           1       1.00      0.47      0.64       265\n\n    accuracy                           0.47       265\n   macro avg       0.50      0.23      0.32       265\nweighted avg       1.00      0.47      0.64       265\n"
+    },
+    "PortScan": {
+      "split": "PortScan",
+      "samples": 5693,
+      "attacks": 5693,
+      "benign": 0,
+      "predicted_anomalies": 35,
+      "accuracy": 0.006147900930967855,
+      "precision": 1.0,
+      "recall": 0.006147900930967855,
+      "f1": 0.012220670391061452,
+      "confusion_matrix": [
+        [
+          0,
+          0
+        ],
+        [
+          5658,
+          35
+        ]
+      ],
+      "classification_report": "              precision    recall  f1-score   support\n\n           0       0.00      0.00      0.00         0\n           1       1.00      0.01      0.01      5693\n\n    accuracy                           0.01      5693\n   macro avg       0.50      0.00      0.01      5693\nweighted avg       1.00      0.01      0.01      5693\n"
+    },
+    "SSH-Patator": {
+      "split": "SSH-Patator",
+      "samples": 211,
+      "attacks": 211,
+      "benign": 0,
+      "predicted_anomalies": 86,
+      "accuracy": 0.4075829383886256,
+      "precision": 1.0,
+      "recall": 0.4075829383886256,
+      "f1": 0.5791245791245792,
+      "confusion_matrix": [
+        [
+          0,
+          0
+        ],
+        [
+          125,
+          86
+        ]
+      ],
+      "classification_report": "              precision    recall  f1-score   support\n\n           0       0.00      0.00      0.00         0\n           1       1.00      0.41      0.58       211\n\n    accuracy                           0.41       211\n   macro avg       0.50      0.20      0.29       211\nweighted avg       1.00      0.41      0.58       211\n"
+    },
+    "Web Attack \u2013 Brute Force": {
+      "split": "Web Attack \u2013 Brute Force",
+      "samples": 54,
+      "attacks": 54,
+      "benign": 0,
+      "predicted_anomalies": 45,
+      "accuracy": 0.8333333333333334,
+      "precision": 1.0,
+      "recall": 0.8333333333333334,
+      "f1": 0.9090909090909091,
+      "confusion_matrix": [
+        [
+          0,
+          0
+        ],
+        [
+          9,
+          45
+        ]
+      ],
+      "classification_report": "              precision    recall  f1-score   support\n\n           0       0.00      0.00      0.00         0\n           1       1.00      0.83      0.91        54\n\n    accuracy                           0.83        54\n   macro avg       0.50      0.42      0.45        54\nweighted avg       1.00      0.83      0.91        54\n"
+    }
+  },
+  "attack_only": {
+    "split": "all_attacks",
+    "samples": 20000,
+    "attacks": 20000,
+    "benign": 0,
+    "predicted_anomalies": 7252,
+    "accuracy": 0.3626,
+    "precision": 1.0,
+    "recall": 0.3626,
+    "f1": 0.5322178188756789,
+    "confusion_matrix": [
+      [
+        0,
+        0
+      ],
+      [
+        12748,
+        7252
+      ]
+    ],
+    "classification_report": "              precision    recall  f1-score   support\n\n           0       0.00      0.00      0.00         0\n           1       1.00      0.36      0.53     20000\n\n    accuracy                           0.36     20000\n   macro avg       0.50      0.18      0.27     20000\nweighted avg       1.00      0.36      0.53     20000\n"
+  },
+  "summary": {
+    "accuracy": 0.3626,
+    "precision": 1.0,
+    "recall": 0.3626,
+    "f1": 0.5322178188756789
+  },
+  "recommended_threshold": {
+    "recommended": {
+      "threshold": 5.0,
+      "score": 0.0,
+      "benign_fp_rate": 0.0,
+      "attack_recall": 0.0,
+      "monday_fp_rate": 0.0,
+      "tuesday_recall": 0.0
+    },
+    "sweep": [
+      {
+        "threshold": 5.0,
+        "benign_fp_rate": 0.0,
+        "attack_recall": 0.0,
+        "monday_fp_rate": 0.0,
+        "tuesday_recall": 0.0
+      },
+      {
+        "threshold": 5.5,
+        "benign_fp_rate": 0.0,
+        "attack_recall": 0.0,
+        "monday_fp_rate": 0.0,
+        "tuesday_recall": 0.0
+      },
+      {
+        "threshold": 6.0,
+        "benign_fp_rate": 0.0,
+        "attack_recall": 0.0,
+        "monday_fp_rate": 0.0,
+        "tuesday_recall": 0.0
+      },
+      {
+        "threshold": 6.5,
+        "benign_fp_rate": 0.0,
+        "attack_recall": 0.0,
+        "monday_fp_rate": 0.0,
+        "tuesday_recall": 0.0
+      },
+      {
+        "threshold": 7.0,
+        "benign_fp_rate": 0.0,
+        "attack_recall": 0.0,
+        "monday_fp_rate": 0.0,
+        "tuesday_recall": 0.0
+      },
+      {
+        "threshold": 7.5,
+        "benign_fp_rate": 0.0,
+        "attack_recall": 0.0,
+        "monday_fp_rate": 0.0,
+        "tuesday_recall": 0.0
+      },
+      {
+        "threshold": 8.0,
+        "benign_fp_rate": 0.0,
+        "attack_recall": 0.0,
+        "monday_fp_rate": 0.0,
+        "tuesday_recall": 0.0
+      },
+      {
+        "threshold": 8.5,
+        "benign_fp_rate": 0.0,
+        "attack_recall": 0.0,
+        "monday_fp_rate": 0.0,
+        "tuesday_recall": 0.0
+      },
+      {
+        "threshold": 9.0,
+        "benign_fp_rate": 0.0,
+        "attack_recall": 0.0,
+        "monday_fp_rate": 0.0,
+        "tuesday_recall": 0.0
+      }
+    ]
+  }
+}

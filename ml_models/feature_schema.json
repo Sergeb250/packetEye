@@ -1,0 +1,25 @@
+{
+  "feature_names": [
+    "dst_port",
+    "duration_ms_log",
+    "fwd_packets",
+    "bwd_packets",
+    "fwd_bytes_log",
+    "bwd_bytes_log",
+    "flow_bytes_per_s",
+    "flow_packets_per_s",
+    "fwd_pkt_len_mean",
+    "bwd_pkt_len_mean",
+    "pkt_size_avg",
+    "down_up_ratio",
+    "iat_mean",
+    "iat_std",
+    "iat_max",
+    "fwd_iat_mean",
+    "dst_port_entropy",
+    "is_external_dst",
+    "time_of_day_hour",
+    "protocol_encoded"
+  ],
+  "version": 3
+}

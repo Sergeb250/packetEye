@@ -1,0 +1,228 @@
+{
+  "run_id": "20260702T103506Z",
+  "config": {
+    "dataset_label": "2M",
+    "max_train_rows": 2000000,
+    "csv_or_parquet_path": "C:\\Users\\USER\\Downloads\\packetEye\\CIC-IDS2017\\Network-Flows\\CICIDS_Flow.parquet",
+    "eve_json_path": "C:\\Users\\USER\\Downloads\\packetEye\\data\\suricata\\eve.json",
+    "contamination": 0.02,
+    "random_state": 42,
+    "train_scope": "all_days_BENIGN",
+    "verify_scope": "all_days_labeled"
+  },
+  "phases": [
+    {
+      "name": "training",
+      "status": "completed",
+      "detail": "2,000,000 BENIGN rows (all days) in 28.1s",
+      "metrics": {
+        "train_rows": 2000000,
+        "seconds": 28.08
+      }
+    },
+    {
+      "name": "verification",
+      "status": "completed",
+      "detail": "2,000,000 samples | recall=0.367 f1=0.506 | attacks=400,000",
+      "metrics": {
+        "split": "all_days_labeled",
+        "samples": 2000000,
+        "attacks": 400000,
+        "benign": 1600000,
+        "predicted_anomalies": 179729,
+        "accuracy": 0.8568575,
+        "precision": 0.8163512844337865,
+        "recall": 0.366805,
+        "f1": 0.5061744366764471
+      }
+    },
+    {
+      "name": "threshold_tuning",
+      "status": "completed",
+      "detail": "threshold=5.0 | attack recall=0.000 | benign FP=0.000",
+      "metrics": {
+        "threshold": 5.0,
+        "score": 0.0,
+        "benign_fp_rate": 0.0,
+        "attack_recall": 0.0,
+        "monday_fp_rate": 0.0,
+        "tuesday_recall": 0.0
+      }
+    },
+    {
+      "name": "benchmark",
+      "status": "completed",
+      "detail": "100,000 samples | recall=0.364 f1=0.496",
+      "metrics": {
+        "split": "all_labeled",
+        "samples": 100000,
+        "attacks": 20000,
+        "benign": 80000,
+        "predicted_anomalies": 9369,
+        "accuracy": 0.85187,
+        "precision": 0.7768171629843099,
+        "recall": 0.3639,
+        "f1": 0.4956246382239777,
+        "confusion_matrix": [
+          [
+            77909,
+            2091
+          ],
+          [
+            12722,
+            7278
+          ]
+        ],
+        "classification_report": "              precision    recall  f1-score   support\n\n           0       0.86      0.97      0.91     80000\n           1       0.78      0.36      0.50     20000\n\n    accuracy                           0.85    100000\n   macro avg       0.82      0.67      0.70    100000\nweighted avg       0.84      0.85      0.83    100000\n"
+      }
+    }
+  ],
+  "load_meta": {
+    "source": "C:\\Users\\USER\\Downloads\\packetEye\\CIC-IDS2017\\Network-Flows\\CICIDS_Flow.parquet",
+    "train_scope": "all_days_BENIGN",
+    "rows_loaded": 2827677,
+    "trained_at": "2026-07-02T09:51:50.486109+00:00",
+    "dataset": "CIC-IDS2017",
+    "train_day": "all_days_BENIGN",
+    "train_date": "mixed",
+    "train_label": "BENIGN",
+    "train_rows": 2000000,
+    "train_target_rows": 2000000,
+    "dataset_preset": "2M",
+    "feature_count": 16,
+    "contamination": 0.02,
+    "training_seconds": 28.08,
+    "data_source": "C:\\Users\\USER\\Downloads\\packetEye\\CIC-IDS2017\\Network-Flows\\CICIDS_Flow.parquet",
+    "eve_json_path": "C:\\Users\\USER\\Downloads\\packetEye\\data\\suricata\\eve.json"
+  },
+  "verify_meta": {
+    "source": "C:\\Users\\USER\\Downloads\\packetEye\\CIC-IDS2017\\Network-Flows\\CICIDS_Flow.parquet",
+    "train_scope": "all_days_BENIGN",
+    "rows_loaded": 2827677,
+    "verify_metrics": {
+      "split": "all_days_labeled",
+      "samples": 2000000,
+      "attacks": 400000,
+      "benign": 1600000,
+      "predicted_anomalies": 179729,
+      "accuracy": 0.8568575,
+      "precision": 0.8163512844337865,
+      "recall": 0.366805,
+      "f1": 0.5061744366764471
+    }
+  },
+  "threshold": {
+    "recommended": {
+      "threshold": 5.0,
+      "score": 0.0,
+      "benign_fp_rate": 0.0,
+      "attack_recall": 0.0,
+      "monday_fp_rate": 0.0,
+      "tuesday_recall": 0.0
+    },
+    "sweep": [
+      {
+        "threshold": 5.0,
+        "benign_fp_rate": 0.0,
+        "attack_recall": 0.0,
+        "monday_fp_rate": 0.0,
+        "tuesday_recall": 0.0
+      },
+      {
+        "threshold": 5.5,
+        "benign_fp_rate": 0.0,
+        "attack_recall": 0.0,
+        "monday_fp_rate": 0.0,
+        "tuesday_recall": 0.0
+      },
+      {
+        "threshold": 6.0,
+        "benign_fp_rate": 0.0,
+        "attack_recall": 0.0,
+        "monday_fp_rate": 0.0,
+        "tuesday_recall": 0.0
+      },
+      {
+        "threshold": 6.5,
+        "benign_fp_rate": 0.0,
+        "attack_recall": 0.0,
+        "monday_fp_rate": 0.0,
+        "tuesday_recall": 0.0
+      },
+      {
+        "threshold": 7.0,
+        "benign_fp_rate": 0.0,
+        "attack_recall": 0.0,
+        "monday_fp_rate": 0.0,
+        "tuesday_recall": 0.0
+      },
+      {
+        "threshold": 7.5,
+        "benign_fp_rate": 0.0,
+        "attack_recall": 0.0,
+        "monday_fp_rate": 0.0,
+        "tuesday_recall": 0.0
+      },
+      {
+        "threshold": 8.0,
+        "benign_fp_rate": 0.0,
+        "attack_recall": 0.0,
+        "monday_fp_rate": 0.0,
+        "tuesday_recall": 0.0
+      },
+      {
+        "threshold": 8.5,
+        "benign_fp_rate": 0.0,
+        "attack_recall": 0.0,
+        "monday_fp_rate": 0.0,
+        "tuesday_recall": 0.0
+      },
+      {
+        "threshold": 9.0,
+        "benign_fp_rate": 0.0,
+        "attack_recall": 0.0,
+        "monday_fp_rate": 0.0,
+        "tuesday_recall": 0.0
+      }
+    ]
+  },
+  "benchmark": {
+    "overall": {
+      "split": "all_labeled",
+      "samples": 100000,
+      "attacks": 20000,
+      "benign": 80000,
+      "predicted_anomalies": 9369,
+      "accuracy": 0.85187,
+      "precision": 0.7768171629843099,
+      "recall": 0.3639,
+      "f1": 0.4956246382239777,
+      "confusion_matrix": [
+        [
+          77909,
+          2091
+        ],
+        [
+          12722,
+          7278
+        ]
+      ],
+      "classification_report": "              precision    recall  f1-score   support\n\n           0       0.86      0.97      0.91     80000\n           1       0.78      0.36      0.50     20000\n\n    accuracy                           0.85    100000\n   macro avg       0.82      0.67      0.70    100000\nweighted avg       0.84      0.85      0.83    100000\n"
+    },
+    "summary": {
+      "accuracy": 0.3626,
+      "precision": 1.0,
+      "recall": 0.3626,
+      "f1": 0.5322178188756789
+    }
+  },
+  "eve_summary": {
+    "path": "C:\\Users\\USER\\Downloads\\packetEye\\data\\suricata\\eve.json",
+    "exists": false,
+    "size_bytes": 0,
+    "flow_events": 0,
+    "alert_events": 0,
+    "other_events": 0,
+    "last_modified": null
+  }
+}

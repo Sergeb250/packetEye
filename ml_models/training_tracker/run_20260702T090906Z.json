@@ -1,0 +1,87 @@
+{
+  "run_id": "20260702T090906Z",
+  "config": {
+    "dataset_label": "2M",
+    "max_train_rows": 2000000,
+    "csv_or_parquet_path": "C:\\Users\\USER\\Downloads\\packetEye\\CIC-IDS2017\\Network-Flows\\CICIDS_Flow.parquet",
+    "eve_json_path": "C:\\Users\\USER\\Downloads\\eve.json",
+    "train_day": "Monday",
+    "verify_day": "Tuesday",
+    "contamination": 0.02,
+    "random_state": 42
+  },
+  "phases": [
+    {
+      "name": "training",
+      "status": "completed",
+      "detail": "2,000,000 BENIGN rows in 27.6s",
+      "metrics": {
+        "train_rows": 2000000,
+        "seconds": 27.56
+      }
+    },
+    {
+      "name": "verification",
+      "status": "completed",
+      "detail": "2,000,000 samples | recall=0.367 f1=0.506 | attacks=400,000",
+      "metrics": {
+        "split": "Tuesday",
+        "samples": 2000000,
+        "attacks": 400000,
+        "benign": 1600000,
+        "predicted_anomalies": 179729,
+        "accuracy": 0.8568575,
+        "precision": 0.8163512844337865,
+        "recall": 0.366805,
+        "f1": 0.5061744366764471
+      }
+    }
+  ],
+  "load_meta": {
+    "source": "C:\\Users\\USER\\Downloads\\packetEye\\CIC-IDS2017\\Network-Flows\\CICIDS_Flow.parquet",
+    "day_filter_applied": false,
+    "rows_loaded": 2827677,
+    "day": "Monday",
+    "rows_after_day": 2827677,
+    "trained_at": "2026-07-02T08:49:43.239848+00:00",
+    "dataset": "CIC-IDS2017",
+    "train_day": "all_days_BENIGN",
+    "train_date": "2017-07-03",
+    "train_label": "BENIGN",
+    "train_rows": 2000000,
+    "train_target_rows": 2000000,
+    "dataset_preset": "2M",
+    "feature_count": 16,
+    "contamination": 0.02,
+    "training_seconds": 27.56,
+    "data_source": "C:\\Users\\USER\\Downloads\\packetEye\\CIC-IDS2017\\Network-Flows\\CICIDS_Flow.parquet",
+    "eve_json_path": "C:\\Users\\USER\\Downloads\\eve.json"
+  },
+  "verify_meta": {
+    "source": "C:\\Users\\USER\\Downloads\\packetEye\\CIC-IDS2017\\Network-Flows\\CICIDS_Flow.parquet",
+    "day_filter_applied": false,
+    "rows_loaded": 2827677,
+    "day": "Tuesday",
+    "rows_after_day": 2827677,
+    "verify_metrics": {
+      "split": "Tuesday",
+      "samples": 2000000,
+      "attacks": 400000,
+      "benign": 1600000,
+      "predicted_anomalies": 179729,
+      "accuracy": 0.8568575,
+      "precision": 0.8163512844337865,
+      "recall": 0.366805,
+      "f1": 0.5061744366764471
+    }
+  },
+  "eve_summary": {
+    "path": "C:\\Users\\USER\\Downloads\\eve.json",
+    "exists": true,
+    "size_bytes": 154929,
+    "flow_events": 0,
+    "alert_events": 161,
+    "other_events": 0,
+    "last_modified": "2026-07-02T08:20:18.433236+00:00"
+  }
+}

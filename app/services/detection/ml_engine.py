@@ -1,90 +1,173 @@
-"""Isolation Forest anomaly detection with SHAP explanations."""
+"""Isolation Forest anomaly detection using shared feature contract."""
 
+import json
 import logging
-import math
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import IsolationForest
 
+from app.services.detection.features import (
+    FEATURE_NAMES,
+    build_feature_matrix,
+    load_feature_schema,
+    validate_feature_schema,
+)
+
 logger = logging.getLogger(__name__)
 
-FEATURE_NAMES = [
-    "bytes_total_log",
-    "packets_total",
-    "duration_ms_log",
-    "bytes_per_packet",
-    "iat_mean",
-    "iat_std",
-    "dst_port",
-    "dst_port_entropy",
-    "is_external_dst",
-    "time_of_day_hour",
-    "protocol_encoded",
-]
 
-PROTOCOL_MAP = {"TCP": 1, "UDP": 2, "ICMP": 3}
+class ScoreCalibrator:
+    """Map IsolationForest decision_function output onto the app's 0-10 scale.
 
+    Anchor points:
+      - 5.0  == the model's decision boundary (decision_function == 0, where
+               sklearn's predict() flips to -1/anomaly)
+      - 0.0  == the most normal score observed on benign training data (d_max)
+      - 10.0 == d_min, the anomalous headroom bound saved at training time
 
-def _port_entropy(flows_df: pd.DataFrame) -> dict:
-    entropy_by_src = {}
-    for src, group in flows_df.groupby("src_ip"):
-        ports = group["dst_port"].tolist()
-        if not ports:
-            entropy_by_src[src] = 0.0
-            continue
-        counts = {}
-        for p in ports:
-            counts[p] = counts.get(p, 0) + 1
-        total = len(ports)
-        entropy = -sum((c / total) * math.log2(c / total) for c in counts.values() if c > 0)
-        entropy_by_src[src] = entropy
-    return entropy_by_src
+    Without a calibration file (older artifacts) a fixed slope is used so the
+    boundary still lands at 5.0 — decision_function values typically span
+    roughly ±0.2, so slope 25 puts extreme anomalies near 10.
+    """
 
+    DEFAULT_SLOPE = 25.0
 
-def build_feature_matrix(flows: list) -> pd.DataFrame:
-    rows = []
-    df = pd.DataFrame(flows)
-    port_entropy = _port_entropy(df) if len(df) else {}
-
-    for f in flows:
-        bytes_total = (f.get("bytes_sent", 0) or 0) + (f.get("bytes_recv", 0) or 0)
-        packets_total = (f.get("packets_sent", 0) or 0) + (f.get("packets_recv", 0) or 0)
-        duration = f.get("duration_ms", 0) or 0
-        start = f.get("start_time")
-        hour = start.hour if start and hasattr(start, "hour") else 12
-
-        rows.append(
-            {
-                "flow_id": f.get("id"),
-                "bytes_total_log": math.log1p(bytes_total),
-                "packets_total": packets_total,
-                "duration_ms_log": math.log1p(duration),
-                "bytes_per_packet": bytes_total / max(packets_total, 1),
-                "iat_mean": f.get("iat_mean", 0) or 0,
-                "iat_std": f.get("iat_std", 0) or 0,
-                "dst_port": f.get("dst_port", 0) or 0,
-                "dst_port_entropy": port_entropy.get(f.get("src_ip"), 0),
-                "is_external_dst": 1 if f.get("is_external_dst") else 0,
-                "time_of_day_hour": hour,
-                "protocol_encoded": PROTOCOL_MAP.get(f.get("protocol", ""), 0),
-            }
+    def __init__(self, d_min: float | None = None, d_max: float | None = None):
+        valid = (
+            d_min is not None
+            and d_max is not None
+            and d_min < 0 < d_max
         )
-    return pd.DataFrame(rows)
+        self.d_min = float(d_min) if valid else None
+        self.d_max = float(d_max) if valid else None
+
+    @property
+    def is_calibrated(self) -> bool:
+        return self.d_min is not None
+
+    @classmethod
+    def load(cls, path: Path | None) -> "ScoreCalibrator":
+        if not path or not Path(path).exists():
+            return cls()
+        try:
+            data = json.loads(Path(path).read_text(encoding="utf-8"))
+            return cls(d_min=data.get("d_min"), d_max=data.get("d_max"))
+        except (json.JSONDecodeError, OSError, TypeError, ValueError) as exc:
+            logger.warning("Could not load score calibration from %s: %s", path, exc)
+            return cls()
+
+    def normalize(self, raw_score: float) -> float:
+        d = float(raw_score)
+        if self.is_calibrated:
+            if d >= 0:
+                score = 5.0 * (1.0 - d / self.d_max)
+            else:
+                score = 5.0 + 5.0 * (d / self.d_min)
+        else:
+            score = 5.0 - d * self.DEFAULT_SLOPE
+        return min(10.0, max(0.0, round(score, 2)))
+
+    def normalize_array(self, raw_scores: np.ndarray) -> np.ndarray:
+        d = np.asarray(raw_scores, dtype=float)
+        if self.is_calibrated:
+            scores = np.where(
+                d >= 0,
+                5.0 * (1.0 - d / self.d_max),
+                5.0 + 5.0 * (d / self.d_min),
+            )
+        else:
+            scores = 5.0 - d * self.DEFAULT_SLOPE
+        return np.clip(np.round(scores, 2), 0.0, 10.0)
 
 
 def normalize_if_score(raw_score: float) -> float:
-    """Convert Isolation Forest score (-1 to 0) to 0-10 scale."""
-    return min(10.0, max(0.0, round((-raw_score) * 10, 2)))
+    """Uncalibrated fallback mapping (5.0 == model decision boundary)."""
+    return ScoreCalibrator().normalize(raw_score)
+
+
+def compute_score_calibration(
+    model, X_scaled: np.ndarray, max_rows: int = 500_000, random_state: int = 42
+) -> dict:
+    """Derive 0-10 calibration bounds from benign training scores.
+
+    d_min gets 1.5x headroom beyond the worst benign score so attack flows —
+    typically far more anomalous than any benign flow — spread over 5-10
+    instead of all clipping at 10.
+    """
+    X = np.asarray(X_scaled, dtype=float)
+    if len(X) > max_rows:
+        rng = np.random.default_rng(random_state)
+        X = X[rng.choice(len(X), size=max_rows, replace=False)]
+
+    d = model.decision_function(X)
+    raw_min = float(d.min())
+    raw_max = float(d.max())
+    quantiles = {
+        f"p{q}": float(np.quantile(d, q / 100.0))
+        for q in (0.1, 1, 5, 50, 95, 99, 99.9)
+    }
+    return {
+        "version": 1,
+        "d_min": raw_min * 1.5 if raw_min < 0 else -0.1,
+        "d_max": raw_max if raw_max > 0 else 0.1,
+        "benign_decision_scores": {"min": raw_min, "max": raw_max, **quantiles},
+        "boundary_score": 5.0,
+        "note": "0-10 anomaly scale; 5.0 == IsolationForest decision boundary (predict == -1)",
+    }
+
+
+def save_score_calibration(calibration: dict, path: Path) -> None:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(calibration, indent=2), encoding="utf-8")
 
 
 class MLEngine:
-    def __init__(self, model_path: Path | None = None, threshold: float = 7.5, max_flows: int = 50000):
+    def __init__(
+        self,
+        model_path: Path | None = None,
+        scaler_path: Path | None = None,
+        schema_path: Path | None = None,
+        calibration_path: Path | None = None,
+        threshold: float = 5.0,
+        max_flows: int = 50000,
+        train_on_pcap_fallback: bool = False,
+        strict_schema: bool = True,
+    ):
         self.model_path = model_path
+        self.scaler_path = scaler_path
+        self.schema_path = schema_path
         self.threshold = threshold
         self.max_flows = max_flows
+        self.train_on_pcap_fallback = train_on_pcap_fallback
+        self.strict_schema = strict_schema
         self.model = None
+        self.scaler = None
+        self.feature_names = list(FEATURE_NAMES)
+        self.calibrator = ScoreCalibrator.load(calibration_path)
+
+        if schema_path and schema_path.exists():
+            try:
+                self.feature_names = load_feature_schema(schema_path)
+            except ValueError as exc:
+                if strict_schema:
+                    raise
+                logger.warning("Feature schema validation failed: %s", exc)
+
+        if model_path and model_path.exists():
+            if scaler_path and not scaler_path.exists():
+                logger.warning("Baseline model exists but scaler missing at %s", scaler_path)
+
+        if scaler_path and scaler_path.exists():
+            try:
+                import joblib
+
+                self.scaler = joblib.load(scaler_path)
+            except Exception as exc:
+                logger.warning("Could not load feature scaler: %s", exc)
+
         if model_path and model_path.exists():
             try:
                 import joblib
@@ -93,32 +176,75 @@ class MLEngine:
             except Exception as exc:
                 logger.warning("Could not load baseline model: %s", exc)
 
-    def score_flows(self, flows: list) -> list[dict]:
+    @property
+    def has_baseline(self) -> bool:
+        return self.model is not None and self.scaler is not None
+
+    def _transform_features(self, X: np.ndarray) -> np.ndarray:
+        if self.scaler is not None:
+            return self.scaler.transform(X)
+        return X
+
+    def _build_feature_array(self, features_df: pd.DataFrame) -> np.ndarray:
+        missing = [c for c in self.feature_names if c not in features_df.columns]
+        if missing:
+            msg = f"Missing feature columns for inference: {missing}"
+            if self.strict_schema:
+                raise ValueError(msg)
+            logger.warning(msg)
+        return features_df[self.feature_names].values.astype(float)
+
+    SCORING_CHUNK_SIZE = 2000
+
+    def score_flows(self, flows: list, progress_callback=None) -> list[dict]:
+        """Score flows in chunks so long runs report progress (0-100)."""
         if not flows:
             return []
-
         sample = flows[: self.max_flows]
+        results: list[dict] = []
+        total = len(sample)
+        for start in range(0, total, self.SCORING_CHUNK_SIZE):
+            chunk = sample[start : start + self.SCORING_CHUNK_SIZE]
+            results.extend(self._score_batch(chunk))
+            if progress_callback:
+                progress_callback(min(100, int((start + len(chunk)) * 100 / total)))
+        return results
+
+    def _score_batch(self, sample: list) -> list[dict]:
+        if not sample:
+            return []
         features_df = build_feature_matrix(sample)
         if features_df.empty:
             return []
 
-        X = features_df[FEATURE_NAMES].values
+        try:
+            X = self._build_feature_array(features_df)
+        except ValueError as exc:
+            logger.error("ML scoring aborted: %s", exc)
+            return []
 
         if self.model is None:
+            if not self.train_on_pcap_fallback:
+                logger.warning("No baseline ML model loaded and fallback disabled; skipping ML scoring")
+                return []
             n = len(sample)
             train_size = max(10, int(n * 0.8))
             model = IsolationForest(n_estimators=100, contamination=0.05, random_state=42)
-            model.fit(X[:train_size])
-            scores = model.decision_function(X)
-            explanations = self._simple_explanations(features_df, scores)
+            X_train = self._transform_features(X[:train_size]) if self.scaler else X[:train_size]
+            model.fit(X_train)
+            scores = model.decision_function(self._transform_features(X) if self.scaler else X)
         else:
-            model = self.model
-            scores = model.decision_function(X)
-            explanations = self._simple_explanations(features_df, scores)
+            if self.scaler is None:
+                logger.warning("Baseline model loaded without scaler; scoring with raw features")
+            X_scaled = self._transform_features(X)
+            scores = self.model.decision_function(X_scaled)
+
+        explanations = self._simple_explanations(features_df, scores)
+        norm_scores = self.calibrator.normalize_array(scores)
 
         results = []
         for i, flow in enumerate(sample):
-            norm_score = normalize_if_score(float(scores[i]))
+            norm_score = float(norm_scores[i])
             results.append(
                 {
                     "flow_id": flow.get("id"),
@@ -131,10 +257,10 @@ class MLEngine:
 
     def _simple_explanations(self, features_df: pd.DataFrame, scores: np.ndarray) -> list[str]:
         explanations = []
-        means = features_df[FEATURE_NAMES].mean()
-        for i, row in features_df.iterrows():
+        means = features_df[self.feature_names].mean()
+        for _, row in features_df.iterrows():
             deviations = []
-            for feat in FEATURE_NAMES:
+            for feat in self.feature_names:
                 if means[feat] != 0:
                     ratio = abs(row[feat] - means[feat]) / (abs(means[feat]) + 1e-6)
                     if ratio > 2:

@@ -1,0 +1,75 @@
+{
+  "recommended": {
+    "threshold": 5.0,
+    "score": 0.0,
+    "benign_fp_rate": 0.0,
+    "attack_recall": 0.0,
+    "monday_fp_rate": 0.0,
+    "tuesday_recall": 0.0
+  },
+  "sweep": [
+    {
+      "threshold": 5.0,
+      "benign_fp_rate": 0.0,
+      "attack_recall": 0.0,
+      "monday_fp_rate": 0.0,
+      "tuesday_recall": 0.0
+    },
+    {
+      "threshold": 5.5,
+      "benign_fp_rate": 0.0,
+      "attack_recall": 0.0,
+      "monday_fp_rate": 0.0,
+      "tuesday_recall": 0.0
+    },
+    {
+      "threshold": 6.0,
+      "benign_fp_rate": 0.0,
+      "attack_recall": 0.0,
+      "monday_fp_rate": 0.0,
+      "tuesday_recall": 0.0
+    },
+    {
+      "threshold": 6.5,
+      "benign_fp_rate": 0.0,
+      "attack_recall": 0.0,
+      "monday_fp_rate": 0.0,
+      "tuesday_recall": 0.0
+    },
+    {
+      "threshold": 7.0,
+      "benign_fp_rate": 0.0,
+      "attack_recall": 0.0,
+      "monday_fp_rate": 0.0,
+      "tuesday_recall": 0.0
+    },
+    {
+      "threshold": 7.5,
+      "benign_fp_rate": 0.0,
+      "attack_recall": 0.0,
+      "monday_fp_rate": 0.0,
+      "tuesday_recall": 0.0
+    },
+    {
+      "threshold": 8.0,
+      "benign_fp_rate": 0.0,
+      "attack_recall": 0.0,
+      "monday_fp_rate": 0.0,
+      "tuesday_recall": 0.0
+    },
+    {
+      "threshold": 8.5,
+      "benign_fp_rate": 0.0,
+      "attack_recall": 0.0,
+      "monday_fp_rate": 0.0,
+      "tuesday_recall": 0.0
+    },
+    {
+      "threshold": 9.0,
+      "benign_fp_rate": 0.0,
+      "attack_recall": 0.0,
+      "monday_fp_rate": 0.0,
+      "tuesday_recall": 0.0
+    }
+  ]
+}

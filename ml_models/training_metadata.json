@@ -1,0 +1,17 @@
+{
+  "trained_at": "2026-07-03T08:11:50.567000+00:00",
+  "dataset": "CIC-IDS2017",
+  "train_day": "all_days_BENIGN",
+  "train_date": "mixed",
+  "train_label": "BENIGN",
+  "train_rows": 2000000,
+  "train_target_rows": 2000000,
+  "dataset_preset": "2M",
+  "feature_count": 20,
+  "contamination": 0.05,
+  "n_estimators": 300,
+  "max_samples": 4096,
+  "training_seconds": 26.47,
+  "data_source": "C:\\Users\\USER\\Downloads\\packetEye\\CIC-IDS2017\\Network-Flows\\CICIDS_Flow.parquet",
+  "eve_json_path": "C:\\Users\\USER\\Downloads\\eve.json"
+}
