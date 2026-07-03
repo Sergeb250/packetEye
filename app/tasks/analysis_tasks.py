@@ -15,11 +15,15 @@ from app.services.report_builder import ReportBuilder
 logger = logging.getLogger(__name__)
 
 
-def _update_progress(analysis_id: str, status: str, pct: int):
+def _update_progress(analysis_id: str, status: str, pct: int, message: str | None = None):
     analysis = Analysis.query.get(analysis_id)
     if analysis:
         analysis.status = status
         analysis.progress_pct = pct
+        if message is not None:
+            summary = dict(analysis.summary_json or {})
+            summary["progress_message"] = message
+            analysis.summary_json = summary
         db.session.commit()
 
 
@@ -32,11 +36,16 @@ def parse_pcap(analysis_id: str):
         return
 
     try:
-        _update_progress(analysis_id, "parsing", 5)
+        _update_progress(analysis_id, "parsing", 2, "Opening PCAP and reading packets...")
         parser = PCAPParser(analysis.file_path)
 
         def progress_cb(pct):
-            _update_progress(analysis_id, "parsing", pct)
+            _update_progress(
+                analysis_id,
+                "parsing",
+                pct,
+                f"Extracting network flows from PCAP ({pct}%)...",
+            )
 
         result = parser.parse(progress_callback=progress_cb)
 
@@ -61,6 +70,10 @@ def parse_pcap(analysis_id: str):
                 tls_sni=flow_data.get("tls_sni"),
                 ja3_hash=flow_data.get("ja3_hash"),
                 user_agents=flow_data.get("user_agents", []),
+                iat_mean=flow_data.get("iat_mean", 0.0),
+                iat_std=flow_data.get("iat_std", 0.0),
+                iat_max=flow_data.get("iat_max", 0.0),
+                fwd_iat_mean=flow_data.get("fwd_iat_mean", 0.0),
             )
             db.session.add(flow)
 
@@ -85,9 +98,22 @@ def parse_pcap(analysis_id: str):
         db.session.commit()
 
         analysis._arp_events = result.get("arp_events", [])
-        _update_progress(analysis_id, "parsing", 25)
+        _update_progress(
+            analysis_id,
+            "parsing",
+            25,
+            f"Parsed {len(result['flows']):,} flows — saving to database...",
+        )
 
-        enrich_observables.delay(analysis_id, result.get("arp_events", []))
+        if str(current_app.config.get("ENRICHMENT_MODE", "on_investigate")).lower() == "bulk":
+            enrich_observables.delay(analysis_id, result.get("arp_events", []))
+        else:
+            # on_investigate: OSINT runs later, per finding, when an analyst
+            # clicks Investigate — detection starts immediately.
+            _update_progress(
+                analysis_id, "analyzing", 40, "Skipping bulk enrichment — running detections..."
+            )
+            run_detections.delay(analysis_id, result.get("arp_events", []))
     except Exception as exc:
         logger.exception("Parse failed for %s", analysis_id)
         analysis.status = "failed"
@@ -101,14 +127,19 @@ def enrich_observables(analysis_id: str, arp_events: list = None):
     from flask import current_app
 
     try:
-        _update_progress(analysis_id, "enriching", 28)
+        _update_progress(analysis_id, "enriching", 28, "Starting threat-intel enrichment...")
         orchestrator = EnrichmentOrchestrator(dict(current_app.config))
 
         def progress_cb(pct):
-            _update_progress(analysis_id, "enriching", pct)
+            _update_progress(
+                analysis_id,
+                "enriching",
+                pct,
+                f"Enriching IPs, domains, and observables ({pct}%)...",
+            )
 
         orchestrator.enrich_analysis_sync(analysis_id, progress_callback=progress_cb)
-        _update_progress(analysis_id, "enriching", 55)
+        _update_progress(analysis_id, "enriching", 55, "Enrichment complete — starting detection...")
         run_detections.delay(analysis_id, arp_events or [])
     except Exception as exc:
         logger.exception("Enrichment failed for %s", analysis_id)
@@ -124,18 +155,41 @@ def run_detections(analysis_id: str, arp_events: list = None):
     from flask import current_app
 
     try:
-        _update_progress(analysis_id, "analyzing", 58)
+        _update_progress(analysis_id, "analyzing", 58, "Running detection rules and ML scoring...")
         flows = Flow.query.filter_by(analysis_id=analysis_id).all()
         observables = Observable.query.filter_by(analysis_id=analysis_id).all()
 
+        # Detection spans 58-68%; the engine reports its own 0-100 within that.
+        def detect_progress(pct, message):
+            _update_progress(analysis_id, "analyzing", 58 + int(pct * 0.10), message)
+
         engine = DetectionEngine(dict(current_app.config))
-        findings = engine.run(analysis_id, flows, arp_events or [], observables)
+        findings = engine.run(
+            analysis_id, flows, arp_events or [], observables, progress_cb=detect_progress
+        )
+
+        # Replay the PCAP against the configured Suricata rules (68-70%).
+        analysis = Analysis.query.get(analysis_id)
+        if analysis and analysis.source in (None, "", "pcap", "live_pcap"):
+            from app.services.detection.suricata_scan import alerts_to_findings, scan_pcap
+
+            _update_progress(analysis_id, "analyzing", 68, "Scanning PCAP with Suricata rules...")
+            try:
+                alerts = scan_pcap(dict(current_app.config), analysis.file_path)
+                findings.extend(alerts_to_findings(analysis_id, alerts))
+            except Exception:
+                logger.exception("Suricata PCAP scan failed for %s", analysis_id)
 
         for finding in findings:
             db.session.add(finding)
 
         db.session.commit()
-        _update_progress(analysis_id, "analyzing", 70)
+        _update_progress(
+            analysis_id,
+            "analyzing",
+            70,
+            f"Detection complete — {len(findings)} findings, running AI analysis...",
+        )
         run_llm_analysis.delay(analysis_id)
     except Exception as exc:
         logger.exception("Detection failed for %s", analysis_id)
@@ -151,10 +205,19 @@ def run_llm_analysis(analysis_id: str):
     from flask import current_app
 
     try:
-        _update_progress(analysis_id, "analyzing", 72)
+        _update_progress(analysis_id, "analyzing", 72, "AI enrichment of findings...")
         analyst = LLMAnalyst(dict(current_app.config))
-        analyst.enrich_findings(analysis_id)
-        _update_progress(analysis_id, "analyzing", 85)
+
+        def llm_progress(done, total):
+            _update_progress(
+                analysis_id,
+                "analyzing",
+                72 + int(done * 12 / max(1, total)),
+                f"AI enrichment: finding {done}/{total}...",
+            )
+
+        analyst.enrich_findings(analysis_id, progress_cb=llm_progress)
+        _update_progress(analysis_id, "analyzing", 85, "Generating executive summary...")
         build_report.delay(analysis_id)
     except Exception as exc:
         logger.exception("LLM analysis failed for %s", analysis_id)
@@ -166,7 +229,7 @@ def build_report(analysis_id: str):
     from flask import current_app
 
     try:
-        _update_progress(analysis_id, "analyzing", 92)
+        _update_progress(analysis_id, "analyzing", 92, "Building final report...")
         analyst = LLMAnalyst(dict(current_app.config))
         executive_summary = analyst.generate_executive_summary(analysis_id)
         hunt_hypotheses = analyst.generate_hunt_hypotheses(analysis_id)
@@ -185,6 +248,7 @@ def build_report(analysis_id: str):
             **report["metrics"],
             "executive_summary": executive_summary,
             "hunt_hypotheses": hunt_hypotheses,
+            "progress_message": "Analysis complete.",
         }
         analysis.status = "complete"
         analysis.progress_pct = 100
