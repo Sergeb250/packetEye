@@ -1,3 +1,4 @@
+(() => {
 if (typeof reportData === 'undefined') return;
 
 const charts = reportData.charts || {};
@@ -12,8 +13,8 @@ if (gaugeCtx) {
             datasets: [{
                 data: [riskScore, 10 - riskScore],
                 backgroundColor: [
-                    riskScore >= 8 ? '#dc3545' : riskScore >= 5 ? '#ffc107' : '#198754',
-                    '#212529',
+                    riskScore >= 8 ? '#dc3545' : riskScore >= 5 ? '#d97706' : '#15803d',
+                    '#e5e7eb',
                 ],
                 borderWidth: 0,
             }],
@@ -32,14 +33,14 @@ function barChart(id, labels, data, label) {
         type: 'bar',
         data: {
             labels,
-            datasets: [{ label, data, backgroundColor: '#0dcaf0' }],
+            datasets: [{ label, data, backgroundColor: '#2563eb' }],
         },
         options: {
             indexAxis: id === 'talkersChart' ? 'y' : 'x',
             plugins: { legend: { display: false } },
             scales: {
-                x: { ticks: { color: '#adb5bd' }, grid: { color: '#343a40' } },
-                y: { ticks: { color: '#adb5bd' }, grid: { color: '#343a40' } },
+                x: { ticks: { color: '#6b7280' }, grid: { color: '#e5e7eb' } },
+                y: { ticks: { color: '#6b7280' }, grid: { color: '#e5e7eb' } },
             },
         },
     });
@@ -58,14 +59,15 @@ if (tlEl && Object.keys(timeline).length) {
         type: 'line',
         data: {
             labels: Object.keys(timeline),
-            datasets: [{ label: 'Bytes', data: Object.values(timeline), borderColor: '#0dcaf0', tension: 0.3, fill: false }],
+            datasets: [{ label: 'Bytes', data: Object.values(timeline), borderColor: '#2563eb', tension: 0.3, fill: false }],
         },
         options: {
             plugins: { legend: { display: false } },
             scales: {
-                x: { ticks: { color: '#adb5bd', maxTicksLimit: 8 }, grid: { color: '#343a40' } },
-                y: { ticks: { color: '#adb5bd' }, grid: { color: '#343a40' } },
+                x: { ticks: { color: '#6b7280', maxTicksLimit: 8 }, grid: { color: '#e5e7eb' } },
+                y: { ticks: { color: '#6b7280' }, grid: { color: '#e5e7eb' } },
             },
         },
     });
 }
+})();

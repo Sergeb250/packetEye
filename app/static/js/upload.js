@@ -6,6 +6,10 @@ const fileInput = document.getElementById('fileInput');
 const fileInfo = document.getElementById('fileInfo');
 const submitBtn = document.getElementById('submitBtn');
 const form = document.getElementById('uploadForm');
+const uploadProgress = document.getElementById('uploadProgress');
+const uploadPhase = document.getElementById('uploadPhase');
+const uploadPct = document.getElementById('uploadPct');
+const uploadBar = document.getElementById('uploadBar');
 
 let selectedFile = null;
 
@@ -34,26 +38,64 @@ function handleFile(file) {
     submitBtn.disabled = false;
 }
 
-form.addEventListener('submit', async (e) => {
+function setUploadProgress(pct, phaseText) {
+    if (uploadProgress) uploadProgress.classList.remove('d-none');
+    if (uploadPhase) uploadPhase.textContent = phaseText;
+    if (uploadPct) uploadPct.textContent = `${pct}%`;
+    if (uploadBar) uploadBar.style.width = `${pct}%`;
+}
+
+form.addEventListener('submit', (e) => {
     e.preventDefault();
     if (!selectedFile) return;
 
     submitBtn.disabled = true;
     submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Uploading...';
+    setUploadProgress(0, 'Uploading PCAP file...');
 
     const fd = new FormData();
     fd.append('file', selectedFile);
     fd.append('analysis_name', document.getElementById('analysisName').value);
     fd.append('analyst_notes', document.getElementById('analystNotes').value);
 
-    try {
-        const resp = await fetch('/api/upload', { method: 'POST', body: fd });
-        const data = await resp.json();
-        if (!resp.ok) throw new Error(data.error || 'Upload failed');
-        window.location.href = `/analysis/${data.analysis_id}`;
-    } catch (err) {
-        alert(err.message);
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/upload');
+
+    xhr.upload.addEventListener('progress', (event) => {
+        if (!event.lengthComputable) return;
+        const pct = Math.min(99, Math.round((event.loaded / event.total) * 100));
+        const mbDone = (event.loaded / 1024 / 1024).toFixed(1);
+        const mbTotal = (event.total / 1024 / 1024).toFixed(1);
+        setUploadProgress(pct, `Uploading PCAP (${mbDone} / ${mbTotal} MB)...`);
+    });
+
+    xhr.addEventListener('load', () => {
+        let data = {};
+        try {
+            data = JSON.parse(xhr.responseText || '{}');
+        } catch {
+            data = {};
+        }
+
+        if (xhr.status >= 200 && xhr.status < 300 && data.analysis_id) {
+            setUploadProgress(100, 'Upload complete — redirecting to analysis progress...');
+            uploadBar?.classList.remove('progress-bar-animated');
+            window.location.href = `/analysis/${data.analysis_id}`;
+            return;
+        }
+
+        alert(data.error || 'Upload failed');
         submitBtn.disabled = false;
         submitBtn.innerHTML = '<i class="bi bi-play-fill"></i> Start Analysis';
-    }
+        uploadProgress?.classList.add('d-none');
+    });
+
+    xhr.addEventListener('error', () => {
+        alert('Upload failed — network error');
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = '<i class="bi bi-play-fill"></i> Start Analysis';
+        uploadProgress?.classList.add('d-none');
+    });
+
+    xhr.send(fd);
 });

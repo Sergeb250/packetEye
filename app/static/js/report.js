@@ -7,16 +7,28 @@ async function markFP(findingId) {
     alert('Marked as false positive');
 }
 
-if (typeof reportData !== 'undefined' && reportData.geo_markers) {
-    const map = L.map('threatMap').setView([20, 0], 2);
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-        attribution: '&copy; OpenStreetMap',
-    }).addTo(map);
+// Threat map: merge markers baked into the report with live observable geo
+// (investigations run after the report was built still show up).
+(async () => {
+    const el = document.getElementById('threatMap');
+    if (!el || typeof L === 'undefined') return;
 
-    reportData.geo_markers.forEach(m => {
-        const color = m.is_malicious ? 'red' : 'cyan';
-        L.circleMarker([m.lat, m.lon], { radius: 8, color, fillColor: color, fillOpacity: 0.7 })
-            .bindPopup(`<strong>${m.ip}</strong><br>${m.country || ''}`)
-            .addTo(map);
-    });
-}
+    const baked = (typeof reportData !== 'undefined' && reportData.geo_markers) || [];
+    let live = [];
+    try {
+        const res = await fetch(`/api/analysis/${analysisId}/geo`);
+        if (res.ok) live = (await res.json()).markers || [];
+    } catch { /* fall back to baked markers */ }
+
+    const byIp = new Map();
+    baked.concat(live).forEach((m) => byIp.set(m.ip, m));
+    const markers = Array.from(byIp.values());
+
+    if (!markers.length) {
+        el.innerHTML = '<div class="empty-state"><i class="bi bi-globe"></i>'
+            + 'No geolocated IPs yet — click "Investigate (OSINT)" on a finding to populate the map.</div>';
+        el.style.height = 'auto';
+        return;
+    }
+    window.renderThreatMap('threatMap', markers);
+})();
