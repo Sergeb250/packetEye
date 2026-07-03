@@ -193,6 +193,33 @@ class PCAPParser:
         flow.packet_times.append(ts)
         return flow
 
+    @staticmethod
+    def _parse_ip_payload(ip: dpkt.ip.IP) -> tuple[str | None, Any]:
+        """Return (protocol_kind, parsed_payload) for TCP/UDP/ICMP."""
+        if isinstance(ip.data, dpkt.tcp.TCP):
+            return "tcp", ip.data
+        if isinstance(ip.data, dpkt.udp.UDP):
+            return "udp", ip.data
+        if isinstance(ip.data, dpkt.icmp.ICMP):
+            return "icmp", ip.data
+        if not ip.data:
+            return None, None
+
+        candidates: list[tuple[str, type]] = []
+        if ip.p in (0, dpkt.ip.IP_PROTO_TCP, 6):
+            candidates.append(("tcp", dpkt.tcp.TCP))
+        if ip.p in (0, dpkt.ip.IP_PROTO_UDP, 17):
+            candidates.append(("udp", dpkt.udp.UDP))
+        if ip.p in (0, dpkt.ip.IP_PROTO_ICMP, 1):
+            candidates.append(("icmp", dpkt.icmp.ICMP))
+
+        for kind, cls in candidates:
+            try:
+                return kind, cls(ip.data)
+            except dpkt.UnpackError:
+                continue
+        return None, None
+
     def _process_packet(self, ts: float, buf: bytes):
         try:
             eth = dpkt.ethernet.Ethernet(buf)
@@ -221,8 +248,9 @@ class PCAPParser:
         self._track_observable("ip", src_ip, ts)
         self._track_observable("ip", dst_ip, ts)
 
-        if isinstance(ip.data, dpkt.tcp.TCP):
-            tcp = ip.data
+        kind, payload = self._parse_ip_payload(ip)
+        if kind == "tcp":
+            tcp = payload
             flow = self._get_or_create_flow(
                 src_ip, dst_ip, tcp.sport, tcp.dport, "TCP", ts
             )
@@ -241,8 +269,8 @@ class PCAPParser:
 
             self._inspect_tcp_payload(flow, tcp, src_ip, dst_ip, ts)
 
-        elif isinstance(ip.data, dpkt.udp.UDP):
-            udp = ip.data
+        elif kind == "udp":
+            udp = payload
             flow = self._get_or_create_flow(
                 src_ip, dst_ip, udp.sport, udp.dport, "UDP", ts
             )
@@ -255,10 +283,11 @@ class PCAPParser:
                 flow.packets_recv += 1
             self._inspect_udp_payload(flow, udp, src_ip, dst_ip)
 
-        elif isinstance(ip.data, dpkt.icmp.ICMP):
+        elif kind == "icmp":
+            icmp = payload
             flow = self._get_or_create_flow(src_ip, dst_ip, 0, 0, "ICMP", ts)
             flow.application_layer = "ICMP"
-            flow.bytes_sent += len(ip.data.data) if ip.data.data else 0
+            flow.bytes_sent += len(icmp.data) if icmp.data else 0
             flow.packets_sent += 1
 
     def _inspect_tcp_payload(self, flow, tcp, src_ip, dst_ip, ts):
@@ -352,15 +381,19 @@ class PCAPParser:
             if flow.start_time and flow.end_time:
                 duration_ms = int((flow.end_time - flow.start_time).total_seconds() * 1000)
 
-            iat_mean, iat_std = 0.0, 0.0
+            iat_mean, iat_std, iat_max, fwd_iat_mean = 0.0, 0.0, 0.0, 0.0
             if len(flow.packet_times) > 1:
                 iats = [
                     flow.packet_times[i + 1] - flow.packet_times[i]
                     for i in range(len(flow.packet_times) - 1)
                 ]
                 iat_mean = sum(iats) / len(iats)
+                iat_max = max(iats)
                 if len(iats) > 1:
                     iat_std = math.sqrt(sum((x - iat_mean) ** 2 for x in iats) / len(iats))
+                half = max(1, len(iats) // 2)
+                fwd_iats = iats[:half]
+                fwd_iat_mean = sum(fwd_iats) / len(fwd_iats)
 
             flow_list.append(
                 {
@@ -388,6 +421,8 @@ class PCAPParser:
                     "tls_cert_san": list(flow.tls_cert_san),
                     "iat_mean": iat_mean,
                     "iat_std": iat_std,
+                    "iat_max": iat_max,
+                    "fwd_iat_mean": fwd_iat_mean,
                     "is_external_dst": is_external_ip(flow.dst_ip),
                 }
             )
