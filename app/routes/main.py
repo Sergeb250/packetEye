@@ -17,6 +17,7 @@ main_bp = Blueprint("main", __name__)
 
 LIVE_ENDPOINTS = (
     "main.live_overview",
+    "main.live_ai_triage",
     "main.live_capture",
     "main.live_suricata",
     "main.live_ml",
@@ -38,6 +39,11 @@ def index():
 @main_bp.route("/live/overview")
 def live_overview():
     return render_template("live/ops_center.html", live=_live_context(), live_page="overview")
+
+
+@main_bp.route("/live/ai-triage")
+def live_ai_triage():
+    return render_template("live/ops_center.html", live=_live_context(), live_page="ai_triage")
 
 
 @main_bp.route("/live/capture")

@@ -17,6 +17,21 @@ from app.services.ml_dashboard import build_live_monitor_context
 from app.tasks.live_tasks import create_live_session, stop_live_monitor_task
 from app.services.live.alert_service import AlertService
 from app.services.live.monitor import monitor_status, stop_monitor, rebind_eve
+from app.services.live.live_packet_llm import (
+    llm_packet_analysis_status,
+    set_llm_packet_analysis,
+    stop_llm_packet_analysis,
+)
+from app.services.live.triage_registry import (
+    get_incident,
+    list_incidents,
+    set_verdict,
+    summary_stats,
+    update_incident,
+)
+from app.services.live.triage_inspector import deep_inspect_incident
+from app.services.llm.connectivity import probe_llm_connectivity
+from app.services.llm.suricata_rule_writer import generate_suricata_rules
 from app.services.live import suricata_manager
 from app.services.live.webhook_notifier import WebhookNotifier
 from app.services.capture import orchestrator as capture_orchestrator
@@ -270,6 +285,8 @@ def health():
                 config.get("LLM_API_KEY") or config.get("NVIDIA_API_KEY")
             ),
             "nvidia_configured": bool(config.get("NVIDIA_API_KEY") or config.get("LLM_API_KEY")),
+            "zai_configured": bool(config.get("ZAI_API_KEY")),
+            "zai_model": config.get("ZAI_MODEL"),
             "virustotal_configured": bool(config.get("VIRUSTOTAL_API_KEY")),
             "abuseipdb_configured": bool(config.get("ABUSEIPDB_API_KEY")),
             "ml_baseline_loaded": ml_model.exists() and ml_scaler.exists(),
@@ -401,6 +418,7 @@ def live_stop():
         return jsonify({"error": "session_id required"}), 400
 
     stop_monitor(session_id)
+    stop_llm_packet_analysis()
     stop_live_monitor_task.delay(session_id)
 
     analysis = Analysis.query.get(session_id)
@@ -487,6 +505,132 @@ def live_alerts():
         allowed = {s.strip() for s in source_q.split(",") if s.strip()}
         alerts = [a for a in alerts if (a.get("type") or "").lower() in allowed]
     return jsonify({"alerts": alerts, "count": len(alerts)})
+
+
+@api_bp.route("/llm/test", methods=["POST"])
+@limiter.limit("20 per hour")
+def llm_test():
+    result = probe_llm_connectivity(dict(current_app.config))
+    status = 200 if result.get("ok") else 503
+    return jsonify(result), status
+
+
+@api_bp.route("/live/llm-packets", methods=["GET", "POST"])
+@limiter.limit("30 per hour")
+def live_llm_packets():
+    if request.method == "GET":
+        return jsonify(llm_packet_analysis_status())
+
+    data = request.get_json() or {}
+    enabled = data.get("enabled")
+    if enabled is None:
+        return jsonify({"error": "enabled (true/false) required"}), 400
+    result = set_llm_packet_analysis(
+        current_app._get_current_object(),
+        enabled=bool(enabled),
+        session_id=data.get("session_id"),
+    )
+    if not result.get("ok"):
+        return jsonify(result), 400
+    return jsonify(result)
+
+
+@limiter.exempt
+@api_bp.route("/live/triage/incidents")
+def live_triage_incidents():
+    session_id = request.args.get("session_id")
+    if not session_id:
+        return jsonify({"error": "session_id required"}), 400
+    since = request.args.get("since", 0, type=float)
+    disposition = (request.args.get("disposition") or "").strip() or None
+    source = (request.args.get("source") or "").strip() or None
+    search = (request.args.get("search") or "").strip() or None
+    limit = min(500, request.args.get("limit", 200, type=int))
+    rows = list_incidents(
+        session_id,
+        since_ts=since,
+        disposition=disposition,
+        source=source,
+        search=search,
+        limit=limit,
+    )
+    return jsonify({"incidents": rows, "count": len(rows)})
+
+
+@api_bp.route("/live/triage/inspect", methods=["POST"])
+@limiter.limit("30 per hour")
+def live_triage_inspect():
+    data = request.get_json() or {}
+    session_id = data.get("session_id")
+    incident_id = data.get("incident_id")
+    if not session_id or not incident_id:
+        return jsonify({"error": "session_id and incident_id required"}), 400
+    row = get_incident(session_id, incident_id)
+    if not row:
+        return jsonify({"error": "Incident not found"}), 404
+    result = deep_inspect_incident(dict(current_app.config), row)
+    if result.get("ok"):
+        update_incident(session_id, incident_id, {"deep_inspect": result})
+    status = 200 if result.get("ok") else 503
+    return jsonify(result), status
+
+
+@api_bp.route("/live/triage/verdict", methods=["POST"])
+@limiter.limit("60 per hour")
+def live_triage_verdict():
+    data = request.get_json() or {}
+    session_id = data.get("session_id")
+    incident_id = data.get("incident_id")
+    disposition = (data.get("disposition") or "").strip()
+    if not session_id or not incident_id or not disposition:
+        return jsonify({"error": "session_id, incident_id, and disposition required"}), 400
+    row = set_verdict(
+        session_id,
+        incident_id,
+        disposition,
+        analyst_note=(data.get("note") or "").strip(),
+    )
+    if not row:
+        return jsonify({"error": "Incident not found"}), 404
+    return jsonify({"ok": True, "incident": row})
+
+
+@limiter.exempt
+@api_bp.route("/live/triage/status")
+def live_triage_status():
+    session_id = request.args.get("session_id")
+    llm = llm_packet_analysis_status()
+    stats = summary_stats(session_id) if session_id else {"total": 0, "by_disposition": {}, "by_source": {}}
+    return jsonify({"llm_packet_triage": llm, "registry": stats})
+
+
+@api_bp.route("/suricata/rules/generate", methods=["POST"])
+@limiter.limit("20 per hour")
+def suricata_rules_generate():
+    data = request.get_json() or {}
+    description = (data.get("description") or "").strip()
+    existing = data.get("existing_content")
+    if existing is None:
+        read = suricata_manager.read_rules(dict(current_app.config))
+        existing = read.get("content") if read.get("ok") else ""
+    result = generate_suricata_rules(dict(current_app.config), description, existing or "")
+    if not result.get("ok"):
+        return jsonify(result), 400
+    return jsonify(result)
+
+
+@api_bp.route("/suricata/rules/test", methods=["POST"])
+@limiter.limit("30 per hour")
+def suricata_rules_test():
+    data = request.get_json() or {}
+    content = data.get("content")
+    if content is None:
+        return jsonify({"error": "content field required"}), 400
+    iface = (data.get("interface") or "").strip()
+    result = suricata_manager.test_rules_draft(dict(current_app.config), str(content), iface)
+    if not result.get("ok"):
+        return jsonify(result), 400
+    return jsonify(result)
 
 
 def _geo_markers_for(observables, analysis_name=None) -> list:
@@ -664,7 +808,7 @@ def investigation_flow_result(flow_id):
     return jsonify(result)
 
 
-@api_bp.route("/investigate/target/<analysis_id>/<path:target>", methods=["GET"])
+@api_bp.route("/investigate/target/<analysis_id>/<path:target>", methods=["GET", "POST"])
 @limiter.limit("60 per hour")
 def investigate_target(analysis_id, target):
     Analysis.query.get_or_404(analysis_id)
@@ -677,7 +821,35 @@ def investigate_target(analysis_id, target):
     except ValueError:
         if "." not in target:
             return jsonify({"error": "Invalid target"}), 400
-    result = investigate_target_sync(dict(current_app.config), analysis_id, target_type, target)
+
+    summarize_param = (request.args.get("summarize") or "").strip().lower()
+    detail_level = (request.args.get("detail") or request.args.get("detail_level") or "medium").strip().lower()
+    if detail_level not in ("brief", "medium", "detailed"):
+        detail_level = "medium"
+    alert_context = None
+    if request.method == "POST":
+        body = request.get_json(silent=True) or {}
+        alert_context = body.get("alert_context")
+        if body.get("detail_level"):
+            detail_level = str(body.get("detail_level")).lower()
+        if body.get("summarize") is False:
+            summarize = False
+        elif body.get("summarize"):
+            summarize = True
+        else:
+            summarize = summarize_param not in ("0", "false", "no")
+    else:
+        summarize = summarize_param not in ("0", "false", "no") if summarize_param else True
+
+    result = investigate_target_sync(
+        dict(current_app.config),
+        analysis_id,
+        target_type,
+        target,
+        summarize=summarize,
+        alert_context=alert_context,
+        detail_level=detail_level,
+    )
     if not result.get("ok"):
         return jsonify({"error": result.get("error")}), 400
     return jsonify(result)
