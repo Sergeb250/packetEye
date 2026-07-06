@@ -1673,7 +1673,8 @@ function renderVerdict(entry) {
     const vt = entry.results?.virustotal;
     const abuse = entry.results?.abuseipdb;
     const parts = [];
-    if (vt && vt.malicious != null) parts.push(`VT: ${vt.malicious} malicious`);
+    if (vt?.error) parts.push(`VT: error`);
+    else if (vt && vt.malicious != null) parts.push(`VT: ${vt.malicious} malicious`);
     if (abuse && abuse.abuseConfidenceScore != null) parts.push(`AbuseIPDB: ${abuse.abuseConfidenceScore}%`);
     if (entry.results?.geo?.country) parts.push(`Geo: ${esc(entry.results.geo.country)}`);
     return `${badge}${conf}${parts.length ? `<div class="small text-muted mt-1">${esc(parts.join(' · '))}</div>` : ''}`;

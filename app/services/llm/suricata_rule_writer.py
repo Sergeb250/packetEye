@@ -6,6 +6,7 @@ import logging
 import re
 
 from app.services.llm.ensemble import get_llm_ensemble
+from app.services.llm.tokens import with_tier
 
 logger = logging.getLogger(__name__)
 
@@ -58,11 +59,13 @@ def generate_suricata_rules(config: dict, description: str, existing_content: st
         existing=(existing[:6000] if existing else f"(empty — start sid at {hint_sid})"),
     )
 
-    fast_cfg = {
-        **config,
-        "LLM_TIMEOUT_SECONDS": float(config.get("LLM_LIVE_TIMEOUT_SECONDS", 22)),
-        "LLM_MAX_TOKENS": int(config.get("LLM_LIVE_PACKET_MAX_TOKENS", 512)),
-    }
+    fast_cfg = with_tier(
+        {
+            **config,
+            "LLM_TIMEOUT_SECONDS": float(config.get("LLM_LIVE_TIMEOUT_SECONDS", 22)),
+        },
+        "medium",
+    )
     ensemble = get_llm_ensemble(fast_cfg)
     parsed = ensemble.complete_json(
         RULE_GEN_SYSTEM,

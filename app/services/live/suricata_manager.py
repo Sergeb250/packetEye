@@ -733,6 +733,43 @@ def stop_suricata() -> dict:
     return {"ok": True}
 
 
+def test_rules_draft(config: dict, content: str, interface: str = "") -> dict:
+    """Validate draft rule text with suricata -T without saving to custom.rules."""
+    draft = (content or "").strip()
+    if not draft:
+        return {"ok": False, "error": "No rules content provided."}
+    binary = _resolve_binary(config)
+    if not binary:
+        return {"ok": False, "error": "Suricata not installed"}
+
+    iface = (interface or "").strip() or str(config.get("SURICATA_INTERFACE") or "").strip()
+    if not iface:
+        return {"ok": False, "error": "No interface selected"}
+
+    log_dir = Path(str(config.get("SURICATA_LOG_DIR") or "data/suricata"))
+    log_dir.mkdir(parents=True, exist_ok=True)
+    draft_path = log_dir / "_draft_rules_test.rules"
+    try:
+        draft_path.write_text(draft, encoding="utf-8")
+    except OSError as exc:
+        return {"ok": False, "error": f"Could not write draft rules: {exc}"}
+
+    cfg = dict(config)
+    cfg["SURICATA_CUSTOM_RULES_PATH"] = str(draft_path)
+    sur_args, config_path, cfg_source, prep_err = _build_suricata_args(cfg, iface)
+    if prep_err:
+        return {"ok": False, "error": prep_err, "diagnostics": parse_suricata_output(f"Error: {prep_err}")}
+
+    ok, detail = _suricata_test(binary, sur_args)
+    return {
+        "ok": ok,
+        "config_path": config_path,
+        "config_source": cfg_source,
+        "diagnostics": parse_suricata_output(detail),
+        "error": None if ok else "Rule validation failed",
+    }
+
+
 def read_rules(config: dict) -> dict:
     rules_path = Path(str(config.get("SURICATA_CUSTOM_RULES_PATH") or ""))
     if not str(config.get("SURICATA_CUSTOM_RULES_PATH") or "").strip():

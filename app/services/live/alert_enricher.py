@@ -45,8 +45,9 @@ def _load_osint_sync(config: dict, ip: str, session_id: str = "live") -> dict:
     orch = EnrichmentOrchestrator(config)
     obs = Observable(analysis_id=str(session_id), type="ip", value=ip)
     try:
-        import asyncio
-        return asyncio.run(orch.enrich_observable(obs))
+        from app.services.enrichment.async_runner import run_async
+
+        return run_async(orch.enrich_observable(obs))
     except Exception as exc:
         logger.warning("OSINT for live alert failed: %s", exc)
         return {"error": str(exc)}

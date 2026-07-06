@@ -8,7 +8,7 @@ from collections import deque
 from app.extensions import cache, db
 from app.models.analysis import Finding
 from app.services.detection.scoring import severity_to_score
-from app.services.net_utils import is_external_ip, ml_alert_suppressed
+from app.services.net_utils import is_external_ip, ml_alert_suppressed, suricata_alert_suppressed
 
 logger = logging.getLogger(__name__)
 
@@ -21,12 +21,14 @@ class AlertService:
         threshold: float = 5.0,
         webhook=None,
         whitelist=None,
+        ml_strict_c2_filter: bool = True,
     ):
         self.session_id = session_id
         self.rate_limit = rate_limit_per_minute
         self.threshold = threshold
         self.webhook = webhook
         self.whitelist = whitelist
+        self.ml_strict_c2_filter = ml_strict_c2_filter
         self._timestamps: deque = deque()
 
     def _allowed(self) -> bool:
@@ -50,7 +52,9 @@ class AlertService:
     def emit(self, flow_dict: dict, ml_result: dict) -> dict | None:
         if not ml_result.get("flagged"):
             return None
-        suppressed, reason = ml_alert_suppressed(flow_dict, self.whitelist)
+        suppressed, reason = ml_alert_suppressed(
+            flow_dict, self.whitelist, strict_c2_filter=self.ml_strict_c2_filter
+        )
         if suppressed:
             logger.debug("ML alert suppressed for %s → %s: %s", flow_dict.get("src_ip"), flow_dict.get("dst_ip"), reason)
             return None
@@ -138,7 +142,7 @@ class AlertService:
             "dst_port": alert_dict.get("dst_port"),
             "protocol": alert_dict.get("protocol"),
         }
-        suppressed, reason = ml_alert_suppressed(flow_check, self.whitelist)
+        suppressed, reason = suricata_alert_suppressed(flow_check, self.whitelist)
         if suppressed:
             logger.debug("Suricata alert suppressed: %s", reason)
             return None

@@ -4,7 +4,7 @@
 (function () {
     if (!document.getElementById('socAlertQueue')) return;
 
-    const store = { alerts: [], events: [], selectedId: null, filterSeverity: '', filterSource: '' };
+    const store = { alerts: [], events: [], selectedId: null, filterSeverity: '', filterSource: '', triageByConn: {} };
     let streamSince = 0;
     let streamTimer = null;
 
@@ -42,6 +42,13 @@
         const dst = fmtEp(a.dst_ip, a.dst_port);
         const proto = a.protocol || 'TCP';
 
+        if (a.type === 'llm') {
+            return {
+                headline: `AI triage — ${a.attack_type || 'suspicious packet'}`,
+                body: `${a.explanation || 'Dual-model LLM flagged this packet.'} Confidence: ${a.confidence != null ? Math.round(a.confidence * 100) + '%' : 'n/a'}. Models: ${a.models || 'primary+secondary'}.`,
+                action: 'Open AI Triage for per-model JSON and analyst verdicts.',
+            };
+        }
         if (a.type === 'correlation') {
             return {
                 headline: 'Correlated threat — signature + ML agree',
@@ -99,17 +106,40 @@
         const map = {
             suricata: '<span class="badge bg-warning text-dark">IDS</span>',
             ml: '<span class="badge bg-primary">ML</span>',
+            llm: '<span class="badge bg-info text-dark">LLM</span>',
             correlation: '<span class="badge bg-danger">CORR</span>',
         };
         return map[a.type] || map.ml;
     }
 
+    function connKey(a) {
+        return [a.src_ip, a.dst_ip, a.src_port, a.dst_port].join('|');
+    }
+
+    function triageBlock(a) {
+        const row = store.triageByConn[connKey(a)];
+        if (!row) return '';
+        const p = row.llm_primary || {};
+        const s = row.llm_secondary || {};
+        return `
+            <div class="soc-insight-box mb-3 border-info">
+                <div class="soc-insight-label"><i class="bi bi-robot"></i> AI triage (linked)</div>
+                <p class="mb-1 small"><strong>Primary:</strong> ${esc(p.attack_type || p.summary || '—')} ${p.confidence != null ? `(${Math.round(p.confidence * 100)}%)` : ''}</p>
+                <p class="mb-1 small"><strong>Secondary:</strong> ${esc(s.attack_type || s.summary || '—')} ${s.confidence != null ? `(${Math.round(s.confidence * 100)}%)` : ''}</p>
+                ${row.llm_merged_summary ? `<p class="mb-0 small text-muted">${esc(row.llm_merged_summary)}</p>` : ''}
+                <a href="/live/ai-triage" class="btn btn-outline-info btn-sm mt-2">Open AI Triage →</a>
+            </div>`;
+    }
+
     function updateKpis() {
         const counts = { critical: 0, high: 0, medium: 0, info: 0 };
+        const srcCounts = { suricata: 0, ml: 0, llm: 0, correlation: 0 };
         store.alerts.forEach((a) => {
             const s = (a.severity || 'medium').toLowerCase();
             if (counts[s] != null) counts[s] += 1;
             else counts.medium += 1;
+            const t = (a.type || '').toLowerCase();
+            if (srcCounts[t] != null) srcCounts[t] += 1;
         });
         const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
         set('socKpiCritical', counts.critical);
@@ -118,7 +148,8 @@
         const totalEl = document.getElementById('socKpiAlerts');
         if (totalEl) {
             totalEl.textContent = window.socServerTotal != null ? window.socServerTotal : store.alerts.length;
-            totalEl.title = window.socServerTotal != null ? 'Total findings (server)' : 'Visible in queue';
+            const breakdown = Object.entries(srcCounts).filter(([, n]) => n).map(([k, n]) => `${k}:${n}`).join(' · ');
+            totalEl.title = breakdown ? `By source — ${breakdown}` : 'Total findings (server)';
         }
         set('socQueueCount', `${store.alerts.length} open`);
     }
@@ -208,9 +239,76 @@
             if (typeof investigateFinding === 'function') investigateFinding(e.target.dataset.findingId);
         });
         container.querySelector('.btn-soc-osint')?.addEventListener('click', (e) => {
-            if (window.openOsintForTarget && (window.sessionId || liveConfig?.active_session?.session_id)) {
-                window.openOsintForTarget(window.sessionId || liveConfig.active_session.session_id, e.target.dataset.ip);
+            const ip = e.target.closest('.btn-soc-osint')?.dataset.ip || e.target.dataset.ip;
+            const sid = window.sessionId || liveConfig?.active_session?.session_id;
+            if (!ip || !sid || !window.openOsintForTarget) return;
+            const inspector = document.getElementById('socInspector');
+            if (inspector) {
+                inspector.innerHTML = `
+                    <div class="soc-inspector-content text-center py-4">
+                        <div class="spinner-border text-info mb-3" role="status"></div>
+                        <div class="fw-semibold">OSINT + AI summary</div>
+                        <div class="small text-muted font-monospace">${esc(ip)}</div>
+                        <p class="small text-muted mb-0 mt-2">Querying threat intel providers and generating analyst summary…</p>
+                    </div>`;
+                document.getElementById('socInspectorCard')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
             }
+            window.openOsintForTarget(sid, ip, {
+                alertContext: ctx,
+                onComplete: (data, aiSummary) => {
+                    if (!inspector) return;
+                    const mal = data.is_malicious;
+                    const abuse = data.enrichment_json?.abuseipdb;
+                    const geo = data.enrichment_json?.geo;
+                    const idb = data.enrichment_json?.internetdb;
+                    const summaryHtml = aiSummary?.summary ? `
+                        <div class="soc-insight-box mb-3 border-info">
+                            <div class="soc-insight-label"><i class="bi bi-robot"></i> AI OSINT summary</div>
+                            <span class="badge ${aiSummary.verdict === 'malicious' ? 'bg-danger' : aiSummary.verdict === 'suspicious' ? 'bg-warning text-dark' : 'bg-success'} mb-2">${esc(aiSummary.verdict || 'unknown')}</span>
+                            <p class="small mb-0">${esc(aiSummary.summary)}</p>
+                        </div>` : '';
+                    inspector.innerHTML = `
+                        <div class="soc-inspector-content">
+                            <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
+                                <span class="badge ${mal ? 'bg-danger' : 'bg-success'}">TI: ${mal ? 'Malicious' : 'Clean'}</span>
+                                <span class="badge bg-secondary">${Math.round((data.confidence || 0) * 100)}% conf.</span>
+                            </div>
+                            <h6 class="mb-2 font-monospace">${esc(ip)}</h6>
+                            ${summaryHtml}
+                            <dl class="row small mb-3">
+                                ${geo?.country ? `<dt class="col-4 text-muted">Geo</dt><dd class="col-8">${esc(geo.city || '')} ${esc(geo.country)} (${esc(geo.isp || geo.org || '')})</dd>` : ''}
+                                ${abuse?.abuseConfidenceScore != null ? `<dt class="col-4 text-muted">AbuseIPDB</dt><dd class="col-8">${esc(abuse.abuseConfidenceScore)}% · ${esc(abuse.usageType || '')}</dd>` : ''}
+                                ${idb?.tags?.length ? `<dt class="col-4 text-muted">Tags</dt><dd class="col-8">${esc(idb.tags.join(', '))}</dd>` : ''}
+                            </dl>
+                            <div class="d-flex flex-wrap gap-2">
+                                <button type="button" class="btn btn-outline-info btn-sm" id="socOsintShowDetail"><i class="bi bi-list-ul"></i> Full OSINT detail</button>
+                                <button type="button" class="btn btn-outline-primary btn-sm" id="socOsintMoreDetail"><i class="bi bi-arrows-expand"></i> More detail</button>
+                                ${ctx.finding_id ? `<button type="button" class="btn btn-info btn-sm btn-soc-investigate" data-finding-id="${esc(ctx.finding_id)}"><i class="bi bi-search"></i> Investigate</button>` : ''}
+                            </div>
+                        </div>`;
+                    inspector.querySelector('#socOsintShowDetail')?.addEventListener('click', () => {
+                        document.getElementById('liveOsintPanel')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                    });
+                    inspector.querySelector('#socOsintMoreDetail')?.addEventListener('click', () => {
+                        window.openOsintForTarget(sid, ip, {
+                            alertContext: ctx,
+                            detailLevel: 'detailed',
+                            onComplete: (d, ai) => {
+                                if (!inspector || !ai?.summary) return;
+                                const block = inspector.querySelector('.soc-insight-box');
+                                if (block) {
+                                    block.innerHTML = `
+                                        <div class="soc-insight-label"><i class="bi bi-robot"></i> AI OSINT summary (detailed)</div>
+                                        <span class="badge bg-info text-dark mb-2">${esc(ai.verdict || 'unknown')}</span>
+                                        <p class="small mb-0">${esc(ai.summary)}</p>
+                                        ${ai.recommended_action ? `<p class="small fw-semibold mt-2 mb-0">${esc(ai.recommended_action)}</p>` : ''}`;
+                                }
+                            },
+                        });
+                    });
+                    wireInspectorActions(inspector, ctx);
+                },
+            });
         });
         container.querySelector('.btn-soc-map')?.addEventListener('click', async (e) => {
             const ip = e.target.dataset.ip;
@@ -279,6 +377,7 @@
                 </div>
                 <h6 class="mb-2">${esc(ins.headline)}</h6>
                 ${renderEnhancedBlock(a)}
+                ${triageBlock(a)}
                 <div class="soc-insight-box mb-3">
                     <div class="soc-insight-label"><i class="bi bi-lightbulb"></i> What this means</div>
                     <p class="mb-2 small">${esc(ins.body)}</p>
@@ -446,6 +545,20 @@
         if (flows && status) flows.textContent = (status.total_flows || 0).toLocaleString();
     };
 
+    async function pollTriageLink() {
+        const sid = window.sessionId || liveConfig?.active_session?.session_id;
+        if (!sid) return;
+        try {
+            const res = await fetch(`/api/live/triage/incidents?session_id=${sid}&limit=100`);
+            if (!res.ok) return;
+            const data = await res.json();
+            store.triageByConn = {};
+            (data.incidents || []).forEach((row) => {
+                store.triageByConn[connKey(row)] = row;
+            });
+        } catch { /* ignore */ }
+    }
+
     async function loadAllAlerts() {
         const sid = window.sessionId || liveConfig?.active_session?.session_id;
         if (!sid) return;
@@ -464,8 +577,10 @@
         refreshSensorHealth();
         pollEventStream();
         loadAllAlerts();
+        pollTriageLink();
         streamTimer = setInterval(pollEventStream, 2000);
         setInterval(refreshSensorHealth, 8000);
+        setInterval(pollTriageLink, 5000);
         document.querySelectorAll('#socAlertFilters button').forEach((btn) => {
             btn.addEventListener('click', () => {
                 document.querySelectorAll('#socAlertFilters button').forEach((b) => b.classList.remove('active'));

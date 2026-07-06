@@ -35,8 +35,24 @@ def is_local_only_flow(flow: dict) -> bool:
     return is_internal_ip(src) and is_internal_ip(dst)
 
 
-def ml_alert_suppressed(flow: dict, whitelist=None) -> tuple[bool, str]:
+def suricata_alert_suppressed(flow: dict, whitelist=None) -> tuple[bool, str]:
+    """Suricata hits are only suppressed by explicit whitelist — not ML C2 heuristics."""
+    if whitelist is not None and whitelist.is_whitelisted_flow(flow):
+        return True, "whitelisted flow"
+    return False, ""
+
+
+def ml_alert_suppressed(
+    flow: dict,
+    whitelist=None,
+    *,
+    strict_c2_filter: bool = True,
+) -> tuple[bool, str]:
     """Suppress ML C2-style alerts for LAN/multicast/whitelisted traffic."""
+    if not strict_c2_filter:
+        if whitelist is not None and whitelist.is_whitelisted_flow(flow):
+            return True, "whitelisted flow"
+        return False, ""
     if is_local_only_flow(flow):
         return True, "local-only endpoints — not Internet C2"
     dst = flow.get("dst_ip") or ""

@@ -10,6 +10,7 @@ from app.services.net_utils import (
     is_internal_ip,
     is_local_only_flow,
     ml_alert_suppressed,
+    suricata_alert_suppressed,
 )
 
 
@@ -71,3 +72,15 @@ def test_whitelist_ssdp_port(tmp_path):
     }
     suppressed, reason = ml_alert_suppressed(flow, engine)
     assert suppressed is True
+
+
+def test_suricata_not_suppressed_for_test_net():
+    flow = {"src_ip": "203.0.113.1", "dst_ip": "192.168.1.1", "dst_port": 22, "protocol": "TCP"}
+    suppressed, _ = suricata_alert_suppressed(flow)
+    assert suppressed is False
+
+
+def test_ml_lab_mode_allows_internal_dst():
+    flow = {"src_ip": "203.0.113.1", "dst_ip": "192.168.1.1", "dst_port": 22, "protocol": "TCP"}
+    suppressed, _ = ml_alert_suppressed(flow, strict_c2_filter=False)
+    assert suppressed is False

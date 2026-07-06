@@ -31,7 +31,7 @@
         <div class="col-6 col-lg-2">
             <div class="soc-kpi soc-kpi-neutral">
                 <div class="soc-kpi-icon"><i class="bi bi-lightning"></i></div>
-                <div class="soc-kpi-value" id="socKpiAlerts">0</div>
+                <div class="soc-kpi-value" id="socKpiAlerts" title="All sources: Suricata, ML, LLM, correlation">0</div>
                 <div class="soc-kpi-label">Total Alerts</div>
             </div>
         </div>
@@ -51,13 +51,17 @@
                     <span><i class="bi bi-list-ul text-danger"></i> Alert Queue</span>
                     <span class="badge bg-secondary" id="socQueueCount">0 open</span>
                 </div>
-                <div class="px-2 py-2 border-bottom d-flex flex-wrap gap-1" id="socAlertFilters">
+                <div class="px-2 py-2 border-bottom d-flex flex-wrap gap-1 align-items-center" id="socAlertFilters">
                     <button type="button" class="btn btn-outline-secondary btn-sm active" data-severity="">All</button>
                     <button type="button" class="btn btn-outline-danger btn-sm" data-severity="critical">Critical</button>
                     <button type="button" class="btn btn-outline-warning btn-sm" data-severity="high">High</button>
                     <button type="button" class="btn btn-outline-info btn-sm" data-severity="medium">Medium</button>
+                    <span class="text-muted small mx-1">|</span>
                     <button type="button" class="btn btn-outline-dark btn-sm" data-source="ml">ML</button>
                     <button type="button" class="btn btn-outline-dark btn-sm" data-source="suricata">Suricata</button>
+                    <button type="button" class="btn btn-outline-dark btn-sm" data-source="llm">LLM</button>
+                    <button type="button" class="btn btn-outline-dark btn-sm" data-source="correlation">CORR</button>
+                    <a href="{{ url_for('main.live_ai_triage') }}" class="btn btn-outline-info btn-sm ms-auto"><i class="bi bi-robot"></i> Open AI Triage →</a>
                 </div>
                 <div class="soc-alert-queue" id="socAlertQueue">
                     <div class="soc-empty" id="socQueueEmpty">
