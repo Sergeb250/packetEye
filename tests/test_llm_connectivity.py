@@ -10,29 +10,28 @@ def test_connectivity_requires_api_key(app):
         app.config["LLM_ENABLED"] = True
         app.config["NVIDIA_API_KEY"] = ""
         app.config["LLM_API_KEY"] = ""
+        app.config["ZAI_API_KEY"] = ""
         result = probe_llm_connectivity(dict(app.config))
         assert result["ok"] is False
-        assert "API key" in result["error"] or "NVIDIA" in result["error"]
+        assert "API key" in result["error"] or "ZAI" in result["error"]
 
 
-@patch("app.services.llm.connectivity.get_provider")
-@patch("app.services.llm.connectivity._build_secondary")
-def test_connectivity_parallel_ok(mock_secondary, mock_primary, app):
-    primary = MagicMock()
-    primary.complete.return_value = '{"status":"ok"}'
-    primary.model = "deepseek-ai/deepseek-v4-pro"
-    secondary = MagicMock()
-    secondary.complete.return_value = '{"status":"ok"}'
-    secondary.model = "z-ai/glm-5.2"
-    mock_primary.return_value = primary
-    mock_secondary.return_value = secondary
+@patch("app.services.llm.connectivity.build_live_stack")
+def test_connectivity_stack_ok(mock_stack, app):
+    zai = MagicMock()
+    zai.complete.return_value = '{"status":"ok"}'
+    zai.model = "glm-4-flash"
+    nvidia = MagicMock()
+    nvidia.complete.return_value = '{"status":"ok"}'
+    nvidia.model = "deepseek-ai/deepseek-v4-pro"
+    mock_stack.return_value = [("zai", zai), ("nvidia", nvidia)]
 
     with app.app_context():
         app.config["LLM_ENABLED"] = True
+        app.config["ZAI_API_KEY"] = "zai-test"
         app.config["NVIDIA_API_KEY"] = "nvapi-test"
-        app.config["LLM_SECONDARY_MODEL"] = "z-ai/glm-5.2"
         result = probe_llm_connectivity(dict(app.config))
 
     assert result["ok"] is True
-    assert result["results"]["primary"]["ok"] is True
-    assert result["results"]["secondary"]["ok"] is True
+    assert result["results"]["zai"]["ok"] is True
+    assert result["results"]["nvidia"]["ok"] is True

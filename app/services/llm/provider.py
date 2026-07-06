@@ -5,50 +5,123 @@ import logging
 import re
 import time
 
+from app.services.llm.rate_limit import (
+    affordable_max_tokens,
+    llm_call_slot,
+    note_failure,
+)
+
 logger = logging.getLogger(__name__)
 
-
-# Hard cap per API attempt. Without this the OpenAI SDK waits up to 600s per
-# attempt (with 2 internal retries) — an unreachable LLM stalls the whole
-# analysis pipeline for hours.
 DEFAULT_TIMEOUT_SECONDS = 45
 
 
 class LLMProvider:
-    def complete(self, system_prompt: str, user_prompt: str, temperature: float = 0.2) -> str:
+    label: str = "llm"
+
+    def _complete_inner(self, system_prompt: str, user_prompt: str, temperature: float) -> str:
         raise NotImplementedError
+
+    def complete(self, system_prompt: str, user_prompt: str, temperature: float = 0.2) -> str:
+        max_attempts = 2
+        tokens = getattr(self, "max_tokens", 512)
+        for attempt in range(max_attempts):
+            with llm_call_slot(self.label):
+                try:
+                    raw = self._complete_inner(system_prompt, user_prompt, temperature)
+                    if raw and raw.strip() not in ("", "{}"):
+                        return raw.strip()
+                    return raw or "{}"
+                except Exception as exc:
+                    note_failure(self.label, exc)
+                    afford = affordable_max_tokens(exc, tokens)
+                    if afford and afford < tokens and attempt < max_attempts - 1:
+                        logger.info("Retrying %s with max_tokens=%s (credit/rate limit)", self.label, afford)
+                        self.max_tokens = afford
+                        tokens = afford
+                        time.sleep(1.5)
+                        continue
+                    logger.error("%s call failed: %s", self.label, exc)
+                    return "{}"
+        return "{}"
 
 
 class OpenAIProvider(LLMProvider):
+    label = "openai"
+
     def __init__(self, api_key: str, model: str = "gpt-4o", timeout: float = DEFAULT_TIMEOUT_SECONDS):
         self.api_key = api_key
         self.model = model
         self.timeout = timeout
+        self.max_tokens = 1024
 
-    def complete(self, system_prompt: str, user_prompt: str, temperature: float = 0.2) -> str:
+    def _complete_inner(self, system_prompt: str, user_prompt: str, temperature: float) -> str:
         if not self.api_key:
             return "{}"
-        try:
-            from openai import OpenAI
+        from openai import OpenAI
 
-            client = OpenAI(api_key=self.api_key, timeout=self.timeout, max_retries=1)
-            response = client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                temperature=temperature,
-            )
-            return response.choices[0].message.content or "{}"
-        except Exception as exc:
-            logger.error("OpenAI call failed: %s", exc)
+        client = OpenAI(api_key=self.api_key, timeout=self.timeout, max_retries=0)
+        response = client.chat.completions.create(
+            model=self.model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=temperature,
+            max_tokens=self.max_tokens,
+        )
+        return response.choices[0].message.content or "{}"
+
+
+class ZAIProvider(LLMProvider):
+    """Z.ai (Zhipu) GLM — OpenAI-compatible API (primary for live analysis)."""
+
+    label = "zai"
+    DEFAULT_BASE_URL = "https://api.z.ai/api/paas/v4/"
+    DEFAULT_MODEL = "glm-4-flash"
+
+    def __init__(
+        self,
+        api_key: str,
+        model: str | None = None,
+        base_url: str | None = None,
+        max_tokens: int = 512,
+        timeout: float = DEFAULT_TIMEOUT_SECONDS,
+    ):
+        self.api_key = api_key
+        self.model = model or self.DEFAULT_MODEL
+        self.base_url = (base_url or self.DEFAULT_BASE_URL).rstrip("/") + "/"
+        self.max_tokens = max_tokens
+        self.timeout = timeout
+
+    def _complete_inner(self, system_prompt: str, user_prompt: str, temperature: float) -> str:
+        if not self.api_key:
             return "{}"
+        from openai import OpenAI
+
+        client = OpenAI(
+            base_url=self.base_url,
+            api_key=self.api_key,
+            timeout=self.timeout,
+            max_retries=0,
+        )
+        response = client.chat.completions.create(
+            model=self.model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=temperature,
+            max_tokens=self.max_tokens,
+            extra_headers={"Accept-Language": "en-US,en"},
+        )
+        return response.choices[0].message.content or "{}"
 
 
 class NVIDIAProvider(LLMProvider):
-    """NVIDIA NIM — OpenAI-compatible free-tier API (DeepSeek V4, etc.)."""
+    """NVIDIA NIM — OpenAI-compatible API (DeepSeek, etc.)."""
 
+    label = "nvidia"
     DEFAULT_BASE_URL = "https://integrate.api.nvidia.com/v1"
     DEFAULT_MODEL = "deepseek-ai/deepseek-v4-pro"
 
@@ -57,7 +130,7 @@ class NVIDIAProvider(LLMProvider):
         api_key: str,
         model: str | None = None,
         base_url: str | None = None,
-        max_tokens: int = 2048,
+        max_tokens: int = 512,
         timeout: float = DEFAULT_TIMEOUT_SECONDS,
     ):
         self.api_key = api_key
@@ -66,63 +139,59 @@ class NVIDIAProvider(LLMProvider):
         self.max_tokens = max_tokens
         self.timeout = timeout
 
-    def complete(self, system_prompt: str, user_prompt: str, temperature: float = 0.2) -> str:
+    def _complete_inner(self, system_prompt: str, user_prompt: str, temperature: float) -> str:
         if not self.api_key:
             return "{}"
-        try:
-            from openai import OpenAI
+        from openai import OpenAI
 
-            client = OpenAI(
-                base_url=self.base_url, api_key=self.api_key,
-                timeout=self.timeout, max_retries=1,
-            )
-            kwargs: dict = {
-                "model": self.model,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                "temperature": temperature,
-                "max_tokens": self.max_tokens,
-            }
-            if "deepseek" in self.model.lower():
-                kwargs["extra_body"] = {"chat_template_kwargs": {"thinking": False}}
-            response = client.chat.completions.create(**kwargs)
-            return response.choices[0].message.content or "{}"
-        except Exception as exc:
-            logger.error("NVIDIA NIM call failed: %s", exc)
-            return "{}"
+        client = OpenAI(
+            base_url=self.base_url, api_key=self.api_key,
+            timeout=self.timeout, max_retries=0,
+        )
+        kwargs: dict = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "temperature": temperature,
+            "max_tokens": self.max_tokens,
+        }
+        if "deepseek" in self.model.lower():
+            kwargs["extra_body"] = {"chat_template_kwargs": {"thinking": False}}
+        response = client.chat.completions.create(**kwargs)
+        return response.choices[0].message.content or "{}"
 
 
 class AnthropicProvider(LLMProvider):
+    label = "anthropic"
+
     def __init__(self, api_key: str, model: str = "claude-sonnet-4-6", timeout: float = DEFAULT_TIMEOUT_SECONDS):
         self.api_key = api_key
         self.model = model
         self.timeout = timeout
+        self.max_tokens = 1024
 
-    def complete(self, system_prompt: str, user_prompt: str, temperature: float = 0.2) -> str:
+    def _complete_inner(self, system_prompt: str, user_prompt: str, temperature: float) -> str:
         if not self.api_key:
             return "{}"
-        try:
-            import anthropic
+        import anthropic
 
-            client = anthropic.Anthropic(api_key=self.api_key, timeout=self.timeout, max_retries=1)
-            response = client.messages.create(
-                model=self.model,
-                max_tokens=2048,
-                system=system_prompt,
-                messages=[{"role": "user", "content": user_prompt}],
-                temperature=temperature,
-            )
-            return response.content[0].text if response.content else "{}"
-        except Exception as exc:
-            logger.error("Anthropic call failed: %s", exc)
-            return "{}"
+        client = anthropic.Anthropic(api_key=self.api_key, timeout=self.timeout, max_retries=0)
+        response = client.messages.create(
+            model=self.model,
+            max_tokens=self.max_tokens,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_prompt}],
+            temperature=temperature,
+        )
+        return response.content[0].text if response.content else "{}"
 
 
 class OpenRouterProvider(LLMProvider):
-    """OpenRouter — fallback when NVIDIA models fail."""
+    """OpenRouter — fallback when primary models fail."""
 
+    label = "openrouter"
     DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 
     def __init__(
@@ -130,7 +199,7 @@ class OpenRouterProvider(LLMProvider):
         api_key: str,
         model: str = "deepseek/deepseek-chat",
         base_url: str | None = None,
-        max_tokens: int = 2048,
+        max_tokens: int = 256,
         timeout: float = DEFAULT_TIMEOUT_SECONDS,
     ):
         self.api_key = api_key
@@ -139,45 +208,59 @@ class OpenRouterProvider(LLMProvider):
         self.max_tokens = max_tokens
         self.timeout = timeout
 
-    def complete(self, system_prompt: str, user_prompt: str, temperature: float = 0.2) -> str:
+    def _complete_inner(self, system_prompt: str, user_prompt: str, temperature: float) -> str:
         if not self.api_key:
             return "{}"
-        try:
-            from openai import OpenAI
+        from openai import OpenAI
 
-            client = OpenAI(
-                base_url=self.base_url,
-                api_key=self.api_key,
-                timeout=self.timeout,
-                max_retries=1,
-            )
-            response = client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                temperature=temperature,
-                max_tokens=self.max_tokens,
-            )
-            return response.choices[0].message.content or "{}"
-        except Exception as exc:
-            logger.error("OpenRouter call failed: %s", exc)
-            return "{}"
+        client = OpenAI(
+            base_url=self.base_url,
+            api_key=self.api_key,
+            timeout=self.timeout,
+            max_retries=0,
+        )
+        response = client.chat.completions.create(
+            model=self.model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=temperature,
+            max_tokens=self.max_tokens,
+        )
+        return response.choices[0].message.content or "{}"
 
 
 def get_provider(config: dict) -> LLMProvider:
-    provider = config.get("LLM_PROVIDER", "nvidia").lower()
+    provider = config.get("LLM_PROVIDER", "zai").lower()
+    max_tokens = int(config.get("LLM_MAX_TOKENS", 512))
+    timeout = float(config.get("LLM_TIMEOUT_SECONDS", DEFAULT_TIMEOUT_SECONDS))
+
+    if provider == "zai":
+        key = (config.get("ZAI_API_KEY") or "").strip()
+        if not key:
+            provider = "nvidia"
+        else:
+            return ZAIProvider(
+                key,
+                config.get("ZAI_MODEL", ZAIProvider.DEFAULT_MODEL),
+                config.get("ZAI_API_BASE", ZAIProvider.DEFAULT_BASE_URL),
+                max_tokens,
+                timeout,
+            )
+
     api_key = config.get("LLM_API_KEY") or config.get("NVIDIA_API_KEY", "")
     model = config.get("LLM_MODEL", NVIDIAProvider.DEFAULT_MODEL)
     base_url = config.get("NVIDIA_API_BASE", NVIDIAProvider.DEFAULT_BASE_URL)
-    max_tokens = int(config.get("LLM_MAX_TOKENS", 2048))
-    timeout = float(config.get("LLM_TIMEOUT_SECONDS", DEFAULT_TIMEOUT_SECONDS))
 
     if provider == "anthropic":
-        return AnthropicProvider(api_key, model, timeout=timeout)
+        p = AnthropicProvider(api_key, model, timeout=timeout)
+        p.max_tokens = max_tokens
+        return p
     if provider == "openai":
-        return OpenAIProvider(api_key, model, timeout=timeout)
+        p = OpenAIProvider(api_key, model, timeout=timeout)
+        p.max_tokens = max_tokens
+        return p
     return NVIDIAProvider(api_key, model, base_url, max_tokens, timeout=timeout)
 
 
