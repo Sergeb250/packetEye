@@ -2,6 +2,9 @@
     <a class="nav-link {% if live_page == 'overview' %}active{% endif %}" href="{{ url_for('main.live_overview') }}">
         <i class="bi bi-shield-lock"></i> SOC Console
     </a>
+    <a class="nav-link {% if live_page == 'ai_triage' %}active{% endif %}" href="{{ url_for('main.live_ai_triage') }}">
+        <i class="bi bi-robot"></i> AI Triage
+    </a>
     <a class="nav-link {% if live_page == 'capture' %}active{% endif %}" href="{{ url_for('main.live_capture') }}">
         <i class="bi bi-ethernet"></i> Traffic Capture
     </a>

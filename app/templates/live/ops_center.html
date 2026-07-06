@@ -14,7 +14,7 @@
         <div class="d-flex flex-wrap justify-content-between align-items-start gap-3">
             <div>
                 <h2 class="mb-1"><i class="bi bi-shield-lock text-info"></i> SOC Operations Center</h2>
-                <p class="text-muted mb-0 small">Live alert queue, network events, and analyst insights — click any item for details.</p>
+                <p class="text-muted mb-0 small">Unified live alerts — Suricata, ML, and AI triage. Click any item for details.</p>
             </div>
             <div class="d-flex flex-wrap align-items-center gap-2">
                 {% if live.ml_loaded %}<span class="badge bg-success"><i class="bi bi-cpu"></i> ML loaded</span>{% endif %}
@@ -36,6 +36,9 @@
     <div class="tab-content live-ops-tab-content" id="liveOpsTabContent">
         <div class="tab-pane fade {% if live_page == 'overview' %}show active{% endif %}" id="tab-overview" role="tabpanel">
             {% include "partials/live_tab_overview.html" %}
+        </div>
+        <div class="tab-pane fade {% if live_page == 'ai_triage' %}show active{% endif %}" id="tab-ai-triage" role="tabpanel">
+            {% include "partials/live_tab_ai_triage.html" %}
         </div>
         <div class="tab-pane fade {% if live_page == 'capture' %}show active{% endif %}" id="tab-capture" role="tabpanel">
             {% include "partials/live_tab_capture.html" %}
@@ -63,6 +66,7 @@
 <script src="{{ url_for('static', filename='js/osint_detail.js') }}"></script>
 <script src="{{ url_for('static', filename='js/live_common.js') }}"></script>
 <script src="{{ url_for('static', filename='js/live_soc.js') }}"></script>
+<script src="{{ url_for('static', filename='js/live_ai_triage.js') }}"></script>
 <script src="{{ url_for('static', filename='js/live_capture.js') }}"></script>
 <script src="{{ url_for('static', filename='js/live_suricata.js') }}"></script>
 {% endblock %}
