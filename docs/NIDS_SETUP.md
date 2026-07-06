@@ -147,3 +147,22 @@ AUTO_SYNC_EVE=true
 ALERT_ENHANCED_ANALYSIS=false
 LLM_LIVE_ALERT_SYNTHESIS=false
 ```
+
+### AI Triage page
+
+Open **Live Ops → AI Triage** (`/live/ai-triage`) for the unified incident table:
+
+1. Start capture + ML (`POST /api/live/start` or Traffic Capture tab).
+2. Enable **Live triage** — dual-model NVIDIA analysis on ~30 packets/min from the packet feed.
+3. All outcomes are logged (suspicious **and** cleared/benign rows) in `live:triage:incidents:{session_id}`.
+4. SSH brute-force and port-scan heuristics flag `:22` SYN bursts and high port entropy even when Suricata/ML miss.
+5. Use **Test NVIDIA models** before enabling triage in production.
+6. SOC Console (`/live/overview`) shows combined IDS / ML / LLM / CORR badges with a link to AI Triage.
+
+```
+LLM_LIVE_PACKETS_PER_MIN=30
+LLM_LIVE_PACKET_MIN_CONFIDENCE=0.55
+LLM_LIVE_TIMEOUT_SECONDS=18
+LLM_LIVE_PACKET_MAX_TOKENS=320
+LIVE_ML_LAB_THRESHOLD=4.0
+```

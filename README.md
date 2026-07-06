@@ -167,7 +167,14 @@ POST /api/upload
 
 ### 4.2 Live NIDS & SOC Ops Center
 
-**UI:** `/live` — unified tabs: Overview, Capture, ML, Suricata, Lab.
+**UI:** `/live` — unified tabs: SOC Console, **AI Triage**, Capture, Suricata, ML, Lab.
+
+**AI Triage** (`/live/ai-triage`):
+
+- Toggle dual-model packet triage (~30 packets/min × primary + secondary NVIDIA models).
+- Unified incident table: Suricata, ML, LLM, heuristics, correlation — **including benign/true-negative rows**.
+- Analyst verdicts: TP / FP / TN per row; deep inspect drawer for extended LLM briefing.
+- API: `GET/POST /api/live/llm-packets`, `GET /api/live/triage/incidents`, `POST /api/live/triage/inspect|verdict`, `GET /api/live/triage/status`, `POST /api/llm/test`.
 
 **Logic:**
 
@@ -499,7 +506,13 @@ flowchart TB
 | POST | `/api/live/start` | Start capture + ML (suricata/tcpdump) |
 | POST | `/api/live/stop` | Stop live session |
 | GET | `/api/live/status` | Session stats |
-| GET | `/api/live/alerts` | ML + Suricata alerts (filter by severity/source) |
+| GET | `/api/live/alerts` | ML + Suricata + LLM alerts (filter by severity/source) |
+| GET/POST | `/api/live/llm-packets` | Toggle dual-model live packet triage |
+| GET | `/api/live/triage/incidents` | Unified triage table (disposition/source filters) |
+| POST | `/api/live/triage/inspect` | Deep LLM analysis for one incident row |
+| POST | `/api/live/triage/verdict` | Analyst TP/FP/TN + optional note |
+| GET | `/api/live/triage/status` | Triage runner stats + registry counts |
+| POST | `/api/llm/test` | Probe primary + secondary NVIDIA models |
 | POST | `/api/live/rebind-eve` | Point session at new EVE path |
 | POST | `/api/live/import-eve` | Upload/import external EVE |
 
@@ -521,6 +534,8 @@ flowchart TB
 | POST | `/api/suricata/start` | Start Suricata |
 | POST | `/api/suricata/stop` | Stop Suricata |
 | GET/POST | `/api/suricata/rules` | List / save custom rules |
+| POST | `/api/suricata/rules/generate` | AI rule draft from natural language |
+| POST | `/api/suricata/rules/test` | Validate draft rules (`suricata -T`) |
 | GET | `/api/suricata/export` | Export EVE alerts |
 
 ### OSINT investigate
@@ -583,6 +598,15 @@ Copy `.env.example` → `.env` (never commit `.env`).
 | `LAB_ROTATE_SEC` | Seconds per attack pattern (default 12) |
 | `ALERT_ENHANCED_ANALYSIS` | OSINT + LLM on live alert emit |
 | `LLM_LIVE_ALERT_SYNTHESIS` | CIC label mapping for live alerts |
+| `LLM_MAX_TOKENS` | Default output cap (768; lower = fewer credit errors) |
+| `LLM_SECONDARY_MAX_TOKENS` | Secondary NVIDIA model cap (512) |
+| `OPENROUTER_MAX_TOKENS` | OpenRouter fallback cap (256 — match your credit balance) |
+| `LLM_MAX_CONCURRENT` | Max simultaneous LLM calls (default 1 — avoids NVIDIA 429) |
+| `LLM_MIN_CALL_INTERVAL_SEC` | Min gap between LLM calls (default 0.75s) |
+| `LLM_ENSEMBLE_PARALLEL` | Parallel dual-model (default false; sequential shares rate limit) |
+| `LLM_LIVE_PACKET_MIN_CONFIDENCE` | Min confidence before LLM alert emit |
+| `LLM_LIVE_TIMEOUT_SECONDS` | Fast timeout for live triage LLM calls |
+| `LIVE_ML_LAB_THRESHOLD` | Relaxed ML threshold when `CAPTURE_LAB_ENABLED=true` |
 | `AUTO_SYNC_EVE` | Auto-detect external Suricata EVE path |
 | `CAPTURE_MODE` | `suricata` or `tcpdump` |
 | `CAPTURE_INTERFACE` | Mirror/SPAN interface |
