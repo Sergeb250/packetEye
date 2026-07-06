@@ -23,3 +23,10 @@ def test_merge_verdicts_requires_confidence_or_dual_agree():
 
 def test_merge_verdicts_ignores_benign():
     assert _merge_verdicts([{"suspicious": False, "confidence": 0.9}], 0.55) is None
+
+
+def test_disposition_from_benign_results():
+    from app.services.live.live_packet_llm import _disposition_from_results
+
+    results = [{"suspicious": False, "disposition_suggested": "true_negative", "_model": "primary"}]
+    assert _disposition_from_results(results, None, []) == "true_negative"

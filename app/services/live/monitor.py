@@ -32,6 +32,7 @@ class LiveMonitor:
         summary = (analysis.summary_json or {}) if analysis else {}
         source = summary.get("capture_source") or summary.get("source_mode") or "suricata"
         self.source = source
+        self.lab_mode = bool(config.get("CAPTURE_LAB_ENABLED"))
 
         if source == "scapy":
             idle = float(config.get("SCAPY_FLOW_IDLE_SEC", 5))
@@ -44,22 +45,27 @@ class LiveMonitor:
                 entropy_window=int(config.get("LIVE_PORT_ENTROPY_WINDOW", 300)),
             )
             self.scapy_monitor = None
+        ml_threshold = float(config.get("ML_ANOMALY_THRESHOLD", 5.0))
+        if self.lab_mode:
+            ml_threshold = float(config.get("LIVE_ML_LAB_THRESHOLD", 4.0))
         self.ml = MLEngine(
             model_path=Path(config.get("ML_MODEL_PATH", "")),
             scaler_path=Path(config.get("ML_SCALER_PATH", "")),
             schema_path=Path(config.get("ML_FEATURE_SCHEMA_PATH", "")),
             calibration_path=Path(config.get("ML_SCORE_CALIBRATION_PATH", "")) if config.get("ML_SCORE_CALIBRATION_PATH") else None,
-            threshold=float(config.get("ML_ANOMALY_THRESHOLD", 5.0)),
+            threshold=ml_threshold,
             max_flows=int(config.get("MAX_FLOWS_ML_SCORING", 50000)),
             train_on_pcap_fallback=config.get("ML_TRAIN_ON_PCAP_FALLBACK", False),
         )
         webhook = WebhookNotifier(config)
+        whitelist = None if self.lab_mode else WhitelistEngine(Path(config.get("WHITELIST_PATH", "")))
         self.alerts = AlertService(
             session_id,
             rate_limit_per_minute=int(config.get("LIVE_ALERT_RATE_LIMIT", 60)),
-            threshold=float(config.get("ML_ANOMALY_THRESHOLD", 5.0)),
+            threshold=ml_threshold,
             webhook=webhook if webhook.enabled else None,
-            whitelist=WhitelistEngine(Path(config.get("WHITELIST_PATH", ""))),
+            whitelist=whitelist,
+            ml_strict_c2_filter=not self.lab_mode,
         )
         self.correlator = LiveCorrelator(
             window_seconds=int(config.get("LIVE_CORRELATION_WINDOW", 120))
@@ -73,6 +79,12 @@ class LiveMonitor:
         if not alert:
             return
         self._alerts_count += 1
+        try:
+            from app.services.live.triage_registry import register_from_alert
+
+            register_from_alert(self.session_id, alert)
+        except Exception as exc:
+            logger.debug("Triage registry skip: %s", exc)
         if (
             self.auto_investigate
             and alert.get("finding_id")

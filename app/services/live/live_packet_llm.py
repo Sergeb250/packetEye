@@ -1,4 +1,4 @@
-"""Live LLM packet triage — sample packet feed, dual-model analysis, emit alerts."""
+"""Live LLM packet triage — sample packet feed, dual-model analysis, triage registry."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import logging
 import threading
 import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections import deque
 
 from flask import Flask
 
@@ -17,12 +17,19 @@ from app.services.capture import orchestrator as capture_orchestrator
 from app.services.detection.scoring import severity_to_score
 from app.services.live import packet_feed
 from app.services.live.alert_service import AlertService
-from app.services.llm.ensemble import _build_secondary
-from app.services.llm.provider import get_provider, parse_json_response
+from app.services.live.triage_heuristics import TriageHeuristics
+from app.services.live.triage_registry import build_incident_row, upsert_incident
+from app.services.llm.stack import build_live_stack, stack_model_names
+from app.services.llm.provider import parse_json_response
 
 logger = logging.getLogger(__name__)
 
 CACHE_KEY = "live:llm_packet_analysis"
+CIC_LABELS = (
+    "BENIGN", "Bot", "DDoS", "DoS GoldenEye", "DoS Hulk", "DoS Slowhttptest",
+    "DoS slowloris", "FTP-Patator", "PortScan", "SSH-Patator", "Web Attack Brute Force",
+    "Web Attack XSS", "Infiltration", "Heartbleed",
+)
 PACKET_SYSTEM = (
     "You are a SOC packet triage engine. Classify one network event quickly. "
     "Respond ONLY with valid JSON, no markdown."
@@ -30,9 +37,13 @@ PACKET_SYSTEM = (
 PACKET_USER = """Network event JSON:
 {packet}
 
-Is this suspicious (scan, brute force, C2, exfil, malware, DoS)?
+CIC-IDS2017 labels (pick best match): {cic_labels}
+
+Is this suspicious (scan, SSH brute force, C2, exfil, malware, DoS)?
 JSON schema:
-{{"suspicious": true|false, "severity": "info|medium|high|critical", "confidence": 0.0-1.0, "attack_type": "short label", "summary": "one sentence for analyst"}}"""
+{{"suspicious": true|false, "severity": "info|medium|high|critical", "confidence": 0.0-1.0,
+ "attack_type": "CIC label e.g. SSH-Patator or BENIGN", "disposition_suggested": "true_positive|true_negative|benign",
+ "summary": "one sentence for analyst", "indicators": ["ssh_syn_flood", "..."]}}"""
 
 _state: dict = {
     "running": False,
@@ -41,23 +52,22 @@ _state: dict = {
     "app": None,
     "session_id": None,
     "stats": {},
+    "heuristics": None,
+    "context_log": deque(maxlen=40),
 }
 
 
 def _fast_providers(config: dict) -> list[tuple[str, object]]:
     timeout = float(config.get("LLM_LIVE_TIMEOUT_SECONDS", 18))
-    max_tok = int(config.get("LLM_LIVE_PACKET_MAX_TOKENS", 320))
-    fast = {
-        **config,
-        "LLM_TIMEOUT_SECONDS": timeout,
-        "LLM_MAX_TOKENS": max_tok,
-        "LLM_SECONDARY_MAX_TOKENS": max_tok,
-    }
-    providers: list[tuple[str, object]] = [("primary", get_provider(fast))]
-    secondary = _build_secondary(fast)
-    if secondary:
-        providers.append(("secondary", secondary))
-    return providers
+    stack = build_live_stack(config, max_models=3)
+    n = len(stack) or 1
+    per_model = max(64, int(config.get("LLM_LIVE_PACKET_MAX_TOKENS", 256)) // n)
+    for _, prov in stack:
+        if hasattr(prov, "max_tokens"):
+            prov.max_tokens = per_model
+        if hasattr(prov, "timeout"):
+            prov.timeout = timeout
+    return stack
 
 
 def _compact_packet(pkt: dict) -> str:
@@ -76,17 +86,18 @@ def _compact_packet(pkt: dict) -> str:
     return json.dumps(slim, default=str)[:1800]
 
 
-def _call_model(name: str, provider, packet_json: str) -> tuple[str, dict]:
-    user = PACKET_USER.format(packet=packet_json)
+def _call_model(name: str, provider, packet_json: str) -> tuple[str, dict, str | None]:
+    user = PACKET_USER.format(packet=packet_json, cic_labels=", ".join(CIC_LABELS))
     try:
         raw = provider.complete(PACKET_SYSTEM, user, temperature=0.1)
         parsed = parse_json_response(raw or "")
         if parsed:
             parsed["_model"] = name
-            return name, parsed
+            return name, parsed, None
+        return name, {}, "empty or unparseable response"
     except Exception as exc:
         logger.debug("Live packet LLM %s failed: %s", name, exc)
-    return name, {}
+        return name, {}, str(exc)
 
 
 def _merge_verdicts(results: list[dict], min_confidence: float) -> dict | None:
@@ -95,7 +106,6 @@ def _merge_verdicts(results: list[dict], min_confidence: float) -> dict | None:
         return None
     best = max(suspicious, key=lambda r: float(r.get("confidence") or 0))
     if float(best.get("confidence") or 0) < min_confidence:
-        # Require at least two models to agree when confidence is low
         if len(suspicious) < 2:
             return None
     sev_rank = {"info": 0, "medium": 1, "high": 2, "critical": 3}
@@ -111,13 +121,119 @@ def _merge_verdicts(results: list[dict], min_confidence: float) -> dict | None:
         "attack_type": best.get("attack_type") or "Suspicious traffic",
         "summary": best.get("summary") or "LLM flagged suspicious packet activity.",
         "models": models,
+        "indicators": best.get("indicators") or [],
+        "disposition_suggested": best.get("disposition_suggested") or "true_positive",
     }
+
+
+def _disposition_from_results(results: list[dict], merged: dict | None, errors: list[str]) -> str:
+    if errors and not results:
+        return "error"
+    if merged and merged.get("suspicious"):
+        disp = str(merged.get("disposition_suggested") or "true_positive").lower()
+        if disp in ("true_positive", "open"):
+            return "true_positive"
+        return disp if disp in ("true_positive", "false_positive", "true_negative", "benign") else "open"
+    if results and all(not r.get("suspicious") for r in results):
+        disp = str(results[0].get("disposition_suggested") or "true_negative").lower()
+        return disp if disp in ("true_negative", "benign") else "true_negative"
+    return "open"
+
+
+def _map_model_outputs(model_outputs: dict[str, dict]) -> tuple[dict, dict, dict]:
+    primary = model_outputs.get("zai") or model_outputs.get("primary") or {}
+    secondary = model_outputs.get("nvidia") or model_outputs.get("secondary") or {}
+    tertiary = model_outputs.get("nvidia_secondary") or model_outputs.get("openrouter") or model_outputs.get("tertiary") or {}
+    if not primary and model_outputs:
+        keys = list(model_outputs.keys())
+        primary = model_outputs.get(keys[0], {})
+        if len(keys) > 1:
+            secondary = model_outputs.get(keys[1], {})
+        if len(keys) > 2:
+            tertiary = model_outputs.get(keys[2], {})
+    return primary, secondary, tertiary
+
+
+def _push_context_entry(packet: dict, model_outputs: dict, merged: dict | None, errors: list[str]) -> None:
+    primary, secondary, tertiary = _map_model_outputs(model_outputs)
+    entry = {
+        "timestamp": time.time(),
+        "connection": f"{packet.get('src_ip')}:{packet.get('src_port', '')} → {packet.get('dst_ip')}:{packet.get('dst_port', '')}",
+        "info": packet.get("info") or "",
+        "zai": primary.get("summary") or primary.get("attack_type") or "—",
+        "nvidia": secondary.get("summary") or secondary.get("attack_type") or "—",
+        "tertiary": tertiary.get("summary") or tertiary.get("attack_type") or "—",
+        "merged": (merged or {}).get("summary") or "cleared",
+        "disposition": (merged or {}).get("disposition_suggested") or "benign",
+        "errors": errors[:3],
+        "models": list(model_outputs.keys()),
+    }
+    log = _state.get("context_log")
+    if log is not None:
+        log.appendleft(entry)
+
+
+def _register_triage_row(
+    session_id: str,
+    packet: dict,
+    *,
+    primary: dict,
+    secondary: dict,
+    tertiary: dict | None = None,
+    merged: dict | None,
+    errors: list[str],
+    sources: list[str],
+    heuristic: dict | None = None,
+) -> dict:
+    tertiary = tertiary or {}
+    disposition = _disposition_from_results(
+        [r for r in (primary, secondary, tertiary) if r],
+        merged,
+        errors,
+    )
+    if heuristic and disposition in ("true_negative", "benign", "open"):
+        disposition = "open"
+    attack = (merged or heuristic or {}).get("attack_type") or "Unknown"
+    if primary.get("attack_type") and attack == "Unknown":
+        attack = primary["attack_type"]
+    severity = (merged or heuristic or primary or {}).get("severity") or "info"
+    confidence = float((merged or heuristic or primary or {}).get("confidence") or 0)
+    summary = (merged or {}).get("summary") or primary.get("summary") or secondary.get("summary") or ""
+    if heuristic and not summary:
+        summary = heuristic.get("summary", "")
+    indicators = list((merged or {}).get("indicators") or [])
+    if heuristic:
+        indicators.extend(heuristic.get("indicators") or [])
+
+    row = build_incident_row(
+        session_id=session_id,
+        src_ip=packet.get("src_ip") or "",
+        dst_ip=packet.get("dst_ip") or "",
+        src_port=packet.get("src_port") or 0,
+        dst_port=packet.get("dst_port") or 0,
+        protocol=packet.get("protocol") or "TCP",
+        sources=sources,
+        attack_type=str(attack)[:120],
+        severity=str(severity).lower(),
+        confidence=confidence,
+        disposition=disposition,
+        llm_primary=primary,
+        llm_secondary=secondary,
+        llm_tertiary=tertiary,
+        llm_merged_summary=summary,
+        errors=errors,
+        packet=packet,
+        indicators=indicators,
+        timestamp=packet.get("timestamp") or time.time(),
+    )
+    return upsert_incident(session_id, row)
 
 
 def _emit_llm_packet_alert(app: Flask, session_id: str, packet: dict, verdict: dict) -> None:
     with app.app_context():
         config = dict(app.config)
-        alerts = AlertService(session_id, ml_strict_c2_filter=False)
+        lab = bool(config.get("CAPTURE_LAB_ENABLED"))
+        alerts = AlertService(session_id, ml_strict_c2_filter=not lab)
         severity = str(verdict.get("severity") or "medium").lower()
         if severity not in ("info", "medium", "high", "critical"):
             severity = "medium"
@@ -165,6 +281,20 @@ def _emit_llm_packet_alert(app: Flask, session_id: str, packet: dict, verdict: d
         db.session.commit()
         alert["finding_id"] = finding.id
         alerts._push_to_feed(alert)
+        from app.services.live.triage_registry import register_from_alert
+
+        register_from_alert(session_id, alert)
+
+
+def _emit_heuristic_alert(app: Flask, session_id: str, packet: dict, hit: dict) -> None:
+    verdict = {
+        "severity": hit.get("severity", "high"),
+        "summary": hit.get("summary"),
+        "attack_type": hit.get("attack_type"),
+        "confidence": hit.get("confidence", 0.7),
+        "models": "heuristic",
+    }
+    _emit_llm_packet_alert(app, session_id, packet, verdict)
 
 
 def _resolve_session_id(config: dict, session_id: str | None) -> str | None:
@@ -187,6 +317,7 @@ def _analysis_loop(app: Flask, poll_sec: float) -> None:
     session_id = _state["session_id"]
     last_packet_id = 0
     min_conf = float(app.config.get("LLM_LIVE_PACKET_MIN_CONFIDENCE", 0.55))
+    heuristics: TriageHeuristics = _state.get("heuristics") or TriageHeuristics()
 
     with app.app_context():
         config = dict(app.config)
@@ -204,24 +335,58 @@ def _analysis_loop(app: Flask, poll_sec: float) -> None:
                 last_packet_id = max(last_packet_id, int(pkt.get("id") or 0))
                 packet_json = _compact_packet(pkt)
 
+                heuristic_hit = heuristics.analyze(pkt)
+                sources = ["llm"]
+                if heuristic_hit:
+                    sources.append("heuristic")
+
                 results: list[dict] = []
-                with ThreadPoolExecutor(max_workers=len(providers)) as pool:
-                    futures = {
-                        pool.submit(_call_model, name, prov, packet_json): name
-                        for name, prov in providers
-                    }
-                    for fut in as_completed(futures):
-                        _, parsed = fut.result()
-                        if parsed:
-                            results.append(parsed)
+                errors: list[str] = []
+                model_outputs: dict[str, dict] = {}
+                for name, prov in providers:
+                    n, parsed, err = _call_model(name, prov, packet_json)
+                    if err:
+                        errors.append(f"{name}: {err}")
+                    if parsed:
+                        results.append(parsed)
+                        model_outputs[name] = parsed
+                    if err and "429" in str(err).lower():
+                        break
+
+                primary, secondary, tertiary = _map_model_outputs(model_outputs)
 
                 _state["stats"]["packets_analyzed"] = _state["stats"].get("packets_analyzed", 0) + 1
-                _state["stats"]["llm_calls"] = _state["stats"].get("llm_calls", 0) + len(providers)
+                _state["stats"]["llm_calls"] = _state["stats"].get("llm_calls", 0) + len(model_outputs)
                 _state["stats"]["last_packet_at"] = time.time()
 
                 verdict = _merge_verdicts(results, min_conf)
-                if verdict:
+                if heuristic_hit and (not verdict or float(heuristic_hit.get("confidence") or 0) > float((verdict or {}).get("confidence") or 0)):
+                    verdict = {
+                        "suspicious": True,
+                        **heuristic_hit,
+                        "models": "heuristic+llm" if results else "heuristic",
+                    }
+
+                _push_context_entry(pkt, model_outputs, verdict, errors)
+
+                row = _register_triage_row(
+                    session_id,
+                    pkt,
+                    primary=primary,
+                    secondary=secondary,
+                    tertiary=tertiary,
+                    merged=verdict,
+                    errors=errors,
+                    sources=sources,
+                    heuristic=heuristic_hit,
+                )
+                _state["stats"]["rows_logged"] = _state["stats"].get("rows_logged", 0) + 1
+
+                if verdict and verdict.get("suspicious"):
                     _emit_llm_packet_alert(app, session_id, pkt, verdict)
+                    _state["stats"]["alerts_emitted"] = _state["stats"].get("alerts_emitted", 0) + 1
+                elif heuristic_hit and float(heuristic_hit.get("confidence") or 0) >= 0.75:
+                    _emit_heuristic_alert(app, session_id, pkt, heuristic_hit)
                     _state["stats"]["alerts_emitted"] = _state["stats"].get("alerts_emitted", 0) + 1
 
             except Exception as exc:
@@ -253,8 +418,8 @@ def set_llm_packet_analysis(app: Flask, *, enabled: bool, session_id: str | None
     config = dict(app.config)
     if enabled and not config.get("LLM_ENABLED", True):
         return {"ok": False, "error": "LLM disabled. Set LLM_ENABLED=true in .env"}
-    if enabled and not (config.get("LLM_API_KEY") or config.get("NVIDIA_API_KEY")):
-        return {"ok": False, "error": "No LLM API key configured"}
+    if enabled and not (config.get("ZAI_API_KEY") or config.get("LLM_API_KEY") or config.get("NVIDIA_API_KEY")):
+        return {"ok": False, "error": "No LLM API key configured (set ZAI_API_KEY and/or NVIDIA_API_KEY)"}
 
     if enabled:
         sid = _resolve_session_id(config, session_id)
@@ -280,7 +445,8 @@ def set_llm_packet_analysis(app: Flask, *, enabled: bool, session_id: str | None
             "stop_event": stop_event,
             "app": app,
             "session_id": sid,
-            "stats": {"packets_analyzed": 0, "llm_calls": 0, "alerts_emitted": 0, "started_at": time.time()},
+            "heuristics": TriageHeuristics(),
+            "stats": {"packets_analyzed": 0, "llm_calls": 0, "alerts_emitted": 0, "rows_logged": 0, "started_at": time.time()},
         })
         thread = threading.Thread(
             target=_analysis_loop,
@@ -290,11 +456,13 @@ def set_llm_packet_analysis(app: Flask, *, enabled: bool, session_id: str | None
         )
         _state["thread"] = thread
         thread.start()
+        stack = build_live_stack(config, max_models=3)
         status = {
             "enabled": True,
             "session_id": sid,
             "packets_per_min": int(config.get("LLM_LIVE_PACKETS_PER_MIN", 30)),
-            "models_per_packet": 2 if config.get("LLM_SECONDARY_MODEL") else 1,
+            "models_per_packet": len(stack),
+            "model_stack": stack_model_names(config),
         }
         _cache_status(status)
         return {"ok": True, **status, "message": "LLM packet triage started"}
@@ -311,7 +479,7 @@ def stop_llm_packet_analysis() -> None:
     thread = _state.get("thread")
     if thread and thread.is_alive():
         thread.join(timeout=8)
-    _state.update({"running": False, "stop_event": None, "thread": None})
+    _state.update({"running": False, "stop_event": None, "thread": None, "heuristics": None})
 
 
 def llm_packet_analysis_status() -> dict:
@@ -325,13 +493,16 @@ def llm_packet_analysis_status() -> dict:
     elapsed = 0.0
     if stats.get("started_at"):
         elapsed = round(time.time() - stats["started_at"], 1)
+    ctx = list(_state.get("context_log") or [])
     return {
         "enabled": running or bool(cached.get("enabled")),
         "running": running,
         "session_id": _state.get("session_id") or cached.get("session_id"),
         "packets_per_min": cached.get("packets_per_min", 30),
-        "models_per_packet": cached.get("models_per_packet", 2),
+        "models_per_packet": cached.get("models_per_packet", 3),
+        "model_stack": cached.get("model_stack") or [],
         "elapsed_sec": elapsed,
         "stats": stats,
+        "context_log": ctx[:30],
         "feed_running": packet_feed.feed_status().get("running"),
     }
