@@ -74,6 +74,10 @@ class EnrichmentOrchestrator:
             logger.debug("Cache set failed: %s", exc)
 
     async def _enrich_ip(self, ip: str) -> dict:
+        from app.services.net_utils import is_external_ip
+
+        if not is_external_ip(ip):
+            return {"skipped": "non-routable or internal address — no OSINT lookup"}
         results = {}
         for provider, client, method in [
             ("virustotal", self.vt, "lookup_ip"),
@@ -100,7 +104,17 @@ class EnrichmentOrchestrator:
                     self._set_cache(provider, "ip", ip, data)
             except Exception as exc:
                 logger.warning("Enrichment %s for IP %s failed: %s", provider, ip, exc)
-                results[provider] = {"error": str(exc)}
+                err = str(exc)
+                if "event loop" in err.lower() and provider == "virustotal":
+                    try:
+                        data = await getattr(client, method)(ip)
+                        if data:
+                            results[provider] = data
+                            self._set_cache(provider, "ip", ip, data)
+                            continue
+                    except Exception as retry_exc:
+                        err = str(retry_exc)
+                results[provider] = {"error": err}
         return results
 
     async def _enrich_domain(self, domain: str) -> dict:
@@ -133,7 +147,16 @@ class EnrichmentOrchestrator:
         signals: list[dict] = []
 
         vt = enrichment.get("virustotal", {})
-        if vt and "malicious" in vt:
+        if vt.get("error"):
+            signals.append(
+                {
+                    "provider": "virustotal",
+                    "triggered": False,
+                    "reason": f"lookup failed: {vt.get('error')}",
+                    "raw": vt,
+                }
+            )
+        elif vt and "malicious" in vt:
             mal = int(vt.get("malicious", 0))
             triggered = mal > 2
             if triggered:
@@ -352,7 +375,9 @@ class EnrichmentOrchestrator:
         return enriched
 
     def enrich_analysis_sync(self, analysis_id: str, progress_callback=None) -> int:
-        return asyncio.run(self.enrich_all(analysis_id, progress_callback))
+        from app.services.enrichment.async_runner import run_async
+
+        return run_async(self.enrich_all(analysis_id, progress_callback))
 
 
 def get_orchestrator():

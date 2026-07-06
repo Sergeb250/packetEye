@@ -8,7 +8,6 @@ Results are persisted on Finding.evidence["investigation"] and shown in the UI.
 
 from __future__ import annotations
 
-import asyncio
 import ipaddress
 import logging
 import threading
@@ -16,7 +15,9 @@ from datetime import datetime, timezone
 
 from app.extensions import db
 from app.models.analysis import Finding
+from app.services.enrichment.async_runner import run_async
 from app.services.enrichment.orchestrator import EnrichmentOrchestrator
+from app.services.enrichment.osint_summary import summarize_osint
 
 logger = logging.getLogger(__name__)
 
@@ -107,7 +108,7 @@ class InvestigationService:
         """Synchronous OSINT fan-out for a small set of targets."""
         if not targets:
             return {}
-        return asyncio.run(self._gather(targets))
+        return run_async(self._gather(targets))
 
 
 def _set_investigation(finding: Finding, payload: dict) -> None:
@@ -237,7 +238,16 @@ def get_investigation(finding_id: str) -> dict:
     }
 
 
-def investigate_target_sync(config: dict, analysis_id: str, target_type: str, value: str) -> dict:
+def investigate_target_sync(
+    config: dict,
+    analysis_id: str,
+    target_type: str,
+    value: str,
+    *,
+    summarize: bool = False,
+    alert_context: dict | None = None,
+    detail_level: str = "medium",
+) -> dict:
     """Lookup a single IP/domain with full OSINT payloads."""
     service = InvestigationService(config)
     if target_type == "ip" and not _is_public_ip(value):
@@ -248,11 +258,22 @@ def investigate_target_sync(config: dict, analysis_id: str, target_type: str, va
             "skipped": "private address — no OSINT lookup",
         }
     try:
-        result = asyncio.run(service.orchestrator.lookup_target(target_type, value))
+        result = run_async(service.orchestrator.lookup_target(target_type, value))
     except Exception as exc:
         logger.exception("Target lookup failed for %s", value)
         return {"ok": False, "error": str(exc)}
-    return {"ok": True, **result}
+
+    payload = {"ok": True, **result}
+    if summarize:
+        payload["ai_summary"] = summarize_osint(
+            config,
+            target=value,
+            target_type=target_type,
+            enrichment=result.get("enrichment_json") or {},
+            alert_context=alert_context,
+            detail_level=detail_level,
+        )
+    return payload
 
 
 def refresh_analysis_metrics(analysis_id: str) -> dict:

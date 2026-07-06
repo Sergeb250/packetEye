@@ -1,4 +1,4 @@
-/* Full OSINT detail modal with provider tabs and verdict breakdown. */
+/* Full OSINT detail modal with provider tabs, loading state, and AI summary. */
 
 (function () {
     function esc(value) {
@@ -12,7 +12,9 @@
     }
 
     function renderVtTab(vt) {
-        if (!vt || vt.error) return renderJson(vt || {});
+        if (!vt || vt.error) {
+            return `<div class="text-warning small mb-2">VirusTotal: ${esc(vt?.error || 'unavailable')}</div>${renderJson(vt || {})}`;
+        }
         const engines = vt.engines || vt.last_analysis_results || {};
         const rows = Object.entries(engines).map(([name, r]) => {
             const result = typeof r === 'object' ? (r.result || r.category || JSON.stringify(r)) : r;
@@ -20,6 +22,14 @@
         }).join('');
         return `<p>Malicious: <strong>${esc(vt.malicious)}</strong> · Suspicious: <strong>${esc(vt.suspicious || 0)}</strong> · Harmless: <strong>${esc(vt.harmless || 0)}</strong></p>
             ${rows ? `<table class="table table-sm"><thead><tr><th>Engine</th><th>Result</th></tr></thead><tbody>${rows}</tbody></table>` : renderJson(vt)}`;
+    }
+
+    function providerHasData(key, enrich) {
+        const data = enrich[key];
+        if (!data || typeof data !== 'object') return false;
+        if (Object.keys(data).length === 0) return false;
+        if (data.error && Object.keys(data).length === 1) return true;
+        return true;
     }
 
     const TAB_RENDERERS = {
@@ -38,7 +48,13 @@
         virustotal: (data) => renderVtTab((data.enrichment_json || data.results || {}).virustotal),
         abuseipdb: (data) => renderJson((data.enrichment_json || data.results || {}).abuseipdb),
         otx: (data) => renderJson((data.enrichment_json || data.results || {}).otx),
-        anyrun: (data) => renderJson((data.enrichment_json || data.results || {}).anyrun),
+        anyrun: (data) => {
+            const ar = (data.enrichment_json || data.results || {}).anyrun;
+            if (ar?.error === 'unauthorized') {
+                return '<p class="text-muted small">ANY.RUN lookup skipped — set <code>ANYRUN_API_KEY</code> in .env to enable.</p>';
+            }
+            return renderJson(ar);
+        },
         greynoise: (data) => renderJson((data.enrichment_json || data.results || {}).greynoise),
         internetdb: (data) => renderJson((data.enrichment_json || data.results || {}).internetdb),
         whois: (data) => renderJson((data.enrichment_json || data.results || {}).whois),
@@ -72,6 +88,54 @@
         };
     }
 
+    function renderAiSummaryBlock(aiSummary) {
+        const el = document.getElementById('osintAiSummary');
+        if (!el) return '';
+        if (!aiSummary || !aiSummary.summary) {
+            el.classList.add('d-none');
+            el.innerHTML = '';
+            return '';
+        }
+        const verdictCls = {
+            clean: 'bg-success',
+            suspicious: 'bg-warning text-dark',
+            malicious: 'bg-danger',
+            unknown: 'bg-secondary',
+        }[aiSummary.verdict] || 'bg-secondary';
+        const highlights = (aiSummary.highlights || []).map((h) => `<li>${esc(h)}</li>`).join('');
+        el.classList.remove('d-none');
+        el.innerHTML = `
+            <div class="soc-insight-box border-info">
+                <div class="soc-insight-label"><i class="bi bi-robot"></i> AI OSINT summary</div>
+                <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
+                    <span class="badge ${verdictCls}">${esc(aiSummary.verdict || 'unknown')}</span>
+                </div>
+                <p class="small mb-1">${esc(aiSummary.summary)}</p>
+                ${highlights ? `<ul class="small text-muted mb-0">${highlights}</ul>` : ''}
+            </div>`;
+        return el.innerHTML;
+    }
+
+    function showOsintLoading(target, message) {
+        const inlinePanel = document.getElementById('liveOsintPanel');
+        const title = document.getElementById('osintDetailTitle');
+        const verdict = document.getElementById('osintDetailVerdict');
+        const tabs = document.getElementById('osintDetailTabs');
+        const content = document.getElementById('osintDetailTabContent');
+        const aiEl = document.getElementById('osintAiSummary');
+        if (aiEl) {
+            aiEl.classList.remove('d-none');
+            aiEl.innerHTML = `<div class="text-info small"><span class="spinner-border spinner-border-sm"></span> ${esc(message || 'Running OSINT lookups…')}</div>`;
+        }
+        if (title) title.innerHTML = `<i class="bi bi-search text-info"></i> OSINT — ${esc(target)}`;
+        if (verdict) verdict.innerHTML = '<span class="badge bg-secondary">Loading…</span>';
+        if (tabs) tabs.innerHTML = '';
+        if (content) content.innerHTML = '';
+        inlinePanel?.classList.remove('d-none');
+    }
+
+    window.renderOsintAiSummary = renderAiSummaryBlock;
+
     window.showOsintDetail = function (payload) {
         const inlinePanel = document.getElementById('liveOsintPanel');
         const modalEl = document.getElementById('osintDetailModal');
@@ -83,6 +147,10 @@
 
         const label = payload.label || payload.value || 'Target';
         title.innerHTML = `<i class="bi bi-search text-info"></i> OSINT — ${esc(label)}`;
+
+        if (payload.ai_summary) {
+            renderAiSummaryBlock(payload.ai_summary);
+        }
 
         const data = payload.targetEntry ? buildTargetData(payload.targetEntry) : payload;
         const mal = data.is_malicious;
@@ -96,7 +164,7 @@
         const availableTabs = ['overview'];
         Object.keys(TAB_LABELS).forEach((key) => {
             if (key === 'overview' || key === 'raw') return;
-            if (enrich[key] && Object.keys(enrich[key]).length) availableTabs.push(key);
+            if (providerHasData(key, enrich)) availableTabs.push(key);
         });
         availableTabs.push('raw');
 
@@ -121,14 +189,39 @@
         }
     };
 
-    window.openOsintForTarget = async function (analysisId, target, type) {
+    window.openOsintForTarget = async function (analysisId, target, options) {
+        options = options || {};
+        const msg = options.summarize !== false
+            ? 'Running OSINT + AI summary…'
+            : 'Running OSINT lookups…';
+        showOsintLoading(target, msg);
+        if (options.onLoading && options.inspectorEl) {
+            options.onLoading(options.inspectorEl, target);
+        }
         try {
-            const res = await fetch(`/api/investigate/target/${analysisId}/${encodeURIComponent(target)}`);
+            const summarize = options.summarize !== false;
+            const detailLevel = options.detailLevel || 'medium';
+            const res = await fetch(
+                `/api/investigate/target/${analysisId}/${encodeURIComponent(target)}`,
+                {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        summarize,
+                        detail_level: detailLevel,
+                        alert_context: options.alertContext || null,
+                    }),
+                },
+            );
             const data = await res.json();
             if (!res.ok) throw new Error(data.error || 'lookup failed');
+
+            const aiSummary = data.ai_summary?.ok ? data.ai_summary : (data.ai_summary?.error ? null : data.ai_summary);
+
             window.showOsintDetail({
                 label: target,
                 value: target,
+                ai_summary: aiSummary,
                 targetEntry: {
                     results: data.enrichment_json,
                     is_malicious: data.is_malicious,
@@ -136,12 +229,22 @@
                     verdict_breakdown: data.verdict_breakdown,
                 },
             });
+
+            if (options.onComplete) {
+                options.onComplete(data, aiSummary);
+            }
         } catch (err) {
             if (typeof showInlineFeedback === 'function') {
                 showInlineFeedback(err.message || 'OSINT lookup failed', 'danger', 'OSINT');
             } else {
                 alert(err.message || 'OSINT lookup failed');
             }
+            const aiEl = document.getElementById('osintAiSummary');
+            if (aiEl) {
+                aiEl.classList.remove('d-none');
+                aiEl.innerHTML = `<div class="text-danger small">${esc(err.message || 'OSINT lookup failed')}</div>`;
+            }
+            if (options.onError) options.onError(err);
         }
     };
 

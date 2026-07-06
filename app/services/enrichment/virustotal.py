@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import threading
 import time
 
 import aiohttp
@@ -10,25 +11,29 @@ logger = logging.getLogger(__name__)
 
 
 class TokenBucket:
+    """Thread-safe rate limiter — safe across multiple asyncio.run() / background loops."""
+
     def __init__(self, rate_per_minute: float = 4):
         self.rate = rate_per_minute / 60.0
         self.tokens = rate_per_minute
         self.max_tokens = rate_per_minute
         self.last = time.monotonic()
-        self._lock = asyncio.Lock()
+        self._lock = threading.Lock()
 
     async def acquire(self):
-        async with self._lock:
+        wait = 0.0
+        with self._lock:
             now = time.monotonic()
             elapsed = now - self.last
             self.tokens = min(self.max_tokens, self.tokens + elapsed * self.rate)
             self.last = now
             if self.tokens < 1:
                 wait = (1 - self.tokens) / self.rate
-                await asyncio.sleep(wait)
                 self.tokens = 0
             else:
                 self.tokens -= 1
+        if wait > 0:
+            await asyncio.sleep(wait)
 
 
 _vt_bucket = TokenBucket(4)
