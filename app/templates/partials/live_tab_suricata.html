@@ -37,9 +37,34 @@
             <span id="surRulesStatus" class="text-muted"></span>
         </label>
         <textarea id="surRules" class="form-control font-monospace" rows="8" spellcheck="false"></textarea>
-        <div class="d-flex gap-2 mt-2">
+        <div class="d-flex flex-wrap gap-2 mt-2 align-items-center">
             <button id="btnRulesSave" class="btn btn-outline-warning btn-sm" type="button"><i class="bi bi-save"></i> Save &amp; reload</button>
             <button id="btnRulesReload" class="btn btn-outline-secondary btn-sm" type="button"><i class="bi bi-arrow-clockwise"></i> Revert</button>
+            <button id="btnRulesAiGenerate" class="btn btn-info btn-sm" type="button" data-bs-toggle="modal" data-bs-target="#surAiRuleModal">
+                <i class="bi bi-robot"></i> Generate with AI
+            </button>
+            <button id="btnRulesTest" class="btn btn-outline-primary btn-sm" type="button"><i class="bi bi-check2-circle"></i> Test rules</button>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="surAiRuleModal" tabindex="-1" aria-labelledby="surAiRuleModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="surAiRuleModalLabel"><i class="bi bi-robot text-info"></i> AI Suricata rule assistant</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <p class="small text-muted">Describe what to detect (SSH brute force, nmap scan, Hydra FTP, etc.). AI injects draft rules into the editor — test with <strong>Test rules</strong>, then save.</p>
+                <label class="form-label small" for="surAiRulePrompt">Detection goal</label>
+                <textarea id="surAiRulePrompt" class="form-control" rows="3" placeholder="e.g. Alert on SSH brute force from external IPs, threshold 8 attempts in 60 seconds"></textarea>
+                <div id="surAiRuleFeedback" class="small mt-2 text-muted"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-info btn-sm" id="surAiRuleSubmit"><i class="bi bi-magic"></i> Generate &amp; inject</button>
+            </div>
         </div>
     </div>
 </div>

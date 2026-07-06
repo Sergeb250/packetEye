@@ -660,11 +660,14 @@ function renderAlerts(alerts) {
         const meta = severityMeta(a.severity);
         const isSuricata = a.type === 'suricata';
         const isCorr = a.type === 'correlation';
+        const isLlm = a.type === 'llm';
         const sourceBadge = isCorr
             ? '<span class="badge bg-danger"><i class="bi bi-link-45deg"></i> CORR</span>'
+            : isLlm
+            ? '<span class="badge bg-info text-dark"><i class="bi bi-robot"></i> AI</span>'
             : isSuricata
             ? '<span class="badge bg-warning text-dark"><i class="bi bi-shield-exclamation"></i> SURICATA</span>'
-            : '<span class="badge bg-info text-dark"><i class="bi bi-cpu"></i> ML</span>';
+            : '<span class="badge bg-primary"><i class="bi bi-cpu"></i> ML</span>';
         const detailBadge = isSuricata
             ? `<span class="badge text-bg-light border">${esc(a.category || 'signature')}</span>`
             : `<span class="badge text-bg-light border">score ${a.anomaly_score}</span>`;
@@ -1014,6 +1017,79 @@ if (sur.btnStop) sur.btnStop.addEventListener('click', stopSuricata);
 if (sur.btnRefresh) sur.btnRefresh.addEventListener('click', refreshSuricata);
 if (sur.btnRulesSave) sur.btnRulesSave.addEventListener('click', saveRules);
 if (sur.btnRulesReload) sur.btnRulesReload.addEventListener('click', loadRules);
+
+async function generateAiRules() {
+    const promptEl = document.getElementById('surAiRulePrompt');
+    const feedback = document.getElementById('surAiRuleFeedback');
+    const submitBtn = document.getElementById('surAiRuleSubmit');
+    const desc = (promptEl?.value || '').trim();
+    if (!desc) {
+        if (feedback) feedback.textContent = 'Describe what to detect first.';
+        return;
+    }
+    const original = submitBtn?.innerHTML;
+    if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Generating…';
+    }
+    if (feedback) feedback.textContent = 'Calling AI model stack (Z.ai → NVIDIA → fallback)…';
+    try {
+        const res = await fetch('/api/suricata/rules/generate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                description: desc,
+                existing_content: sur.rules?.value || '',
+            }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+            if (feedback) feedback.textContent = data.error || 'Generation failed.';
+            await showNotice('AI rule generation failed', data.error || 'Failed', 'danger');
+            return;
+        }
+        const existing = (sur.rules?.value || '').trim();
+        const injected = existing ? `${existing}\n\n${data.rules}` : data.rules;
+        if (sur.rules) sur.rules.value = injected;
+        if (sur.rulesStatus) sur.rulesStatus.textContent = 'AI draft injected — test before save';
+        if (feedback) feedback.textContent = data.explanation || 'Rules injected into editor.';
+        surFeedback('AI rules injected — click Test rules, then Save & reload.', 'success');
+        bootstrap.Modal.getInstance(document.getElementById('surAiRuleModal'))?.hide();
+    } catch {
+        if (feedback) feedback.textContent = 'Network error.';
+    } finally {
+        if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = original;
+        }
+    }
+}
+
+async function testRulesDraft() {
+    if (!sur.rules?.value.trim()) {
+        await showNotice('Test rules', 'Editor is empty.', 'warning');
+        return;
+    }
+    const iface = selectedInterface();
+    const res = await fetch('/api/suricata/rules/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: sur.rules.value, interface: iface }),
+    });
+    const data = await res.json();
+    if (res.ok) {
+        surFeedback(data.message || 'Rule syntax OK (suricata -T passed).', 'success');
+        if (sur.rulesStatus) sur.rulesStatus.textContent = 'validated';
+    } else {
+        surFeedback(data.error || 'Validation failed.', 'danger');
+        if (data.diagnostics?.length && window.suricataPage?.renderDiagnosticsRows) {
+            window.suricataPage.renderDiagnosticsRows(data.diagnostics);
+        }
+    }
+}
+
+document.getElementById('surAiRuleSubmit')?.addEventListener('click', generateAiRules);
+document.getElementById('btnRulesTest')?.addEventListener('click', testRulesDraft);
 if (sur.btnUseEve) {
     sur.btnUseEve.addEventListener('click', async () => {
         const path = suricataEvePath || (els.evePath?.value || '').trim();
@@ -1222,6 +1298,7 @@ if (sur.iface) {
 function initSectionNav() {
     const tabMap = {
         overview: '#tab-overview',
+        ai_triage: '#tab-ai-triage',
         capture: '#tab-capture',
         suricata: '#tab-suricata',
         ml: '#tab-ml',

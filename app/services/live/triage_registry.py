@@ -123,43 +123,53 @@ def build_incident_row(
 
 
 def upsert_incident(session_id: str, row: dict) -> dict:
-    """Insert or merge into existing row with same connection + overlapping sources."""
+    """Insert or merge into existing row with same connection (any disposition)."""
     rows = _load(session_id)
     key = _connection_key(row)
+    if not key.strip("|"):
+        rows.append(row)
+        _save(session_id, rows)
+        return row
     merged = None
     for i, existing in enumerate(rows):
-        if _connection_key(existing) == key and existing.get("disposition") == row.get("disposition", "open"):
-            merged = dict(existing)
-            for src in row.get("sources") or []:
-                if src not in merged.get("sources", []):
-                    merged.setdefault("sources", []).append(src)
-            merged["severity"] = _max_severity(merged.get("severity"), row.get("severity"))
-            merged["confidence"] = max(float(merged.get("confidence") or 0), float(row.get("confidence") or 0))
-            if row.get("llm_merged_summary"):
-                merged["llm_merged_summary"] = row["llm_merged_summary"]
-            if row.get("llm_primary"):
-                merged["llm_primary"] = row["llm_primary"]
-            if row.get("llm_secondary"):
-                merged["llm_secondary"] = row["llm_secondary"]
-            if row.get("llm_tertiary"):
-                merged["llm_tertiary"] = row["llm_tertiary"]
-            if row.get("attack_type") and row["attack_type"] != "Unknown":
-                merged["attack_type"] = row["attack_type"]
-            for e in row.get("errors") or []:
-                if e not in merged.get("errors", []):
-                    merged.setdefault("errors", []).append(e)
-            if row.get("finding_id"):
-                merged["finding_id"] = row["finding_id"]
-            if row.get("alert_ids"):
-                merged.setdefault("alert_ids", []).extend(row["alert_ids"])
-            if row.get("packet"):
-                merged["packet"] = row["packet"]
-            if row.get("indicators"):
-                merged["indicators"] = list(set((merged.get("indicators") or []) + row["indicators"]))
-            rows[i] = merged
-            _save(session_id, rows)
-            return merged
+        if _connection_key(existing) != key:
+            continue
+        merged = dict(existing)
+        for src in row.get("sources") or []:
+            if src not in merged.get("sources", []):
+                merged.setdefault("sources", []).append(src)
+        merged["severity"] = _max_severity(merged.get("severity"), row.get("severity"))
+        merged["confidence"] = max(float(merged.get("confidence") or 0), float(row.get("confidence") or 0))
+        if row.get("llm_merged_summary"):
+            merged["llm_merged_summary"] = row["llm_merged_summary"]
+        if row.get("llm_primary"):
+            merged["llm_primary"] = row["llm_primary"]
+        if row.get("llm_secondary"):
+            merged["llm_secondary"] = row["llm_secondary"]
+        if row.get("llm_tertiary"):
+            merged["llm_tertiary"] = row["llm_tertiary"]
+        if row.get("attack_type") and row["attack_type"] != "Unknown":
+            merged["attack_type"] = row["attack_type"]
+        for e in row.get("errors") or []:
+            if e not in merged.get("errors", []):
+                merged.setdefault("errors", []).append(e)
+        if row.get("finding_id"):
+            merged["finding_id"] = row["finding_id"]
+        if row.get("alert_ids"):
+            merged.setdefault("alert_ids", []).extend(
+                aid for aid in row["alert_ids"] if aid not in merged.get("alert_ids", [])
+            )
+        if row.get("packet"):
+            merged["packet"] = row["packet"]
+        if row.get("indicators"):
+            merged["indicators"] = list(set((merged.get("indicators") or []) + row["indicators"]))
+        merged["from_ai"] = "llm" in (merged.get("sources") or []) or bool(merged.get("llm_primary"))
+        rows[i] = merged
+        _save(session_id, rows)
+        return merged
 
+    sources = row.get("sources") or []
+    row["from_ai"] = "llm" in sources or bool(row.get("llm_primary"))
     rows.append(row)
     _save(session_id, rows)
     return row
@@ -172,6 +182,11 @@ def register_from_alert(session_id: str, alert: dict) -> dict:
     attack = alert.get("attack_type") or alert.get("signature") or alert.get("explanation") or "Alert"
     if source == "ml":
         attack = f"ML anomaly ({alert.get('anomaly_score', '?')})"
+    if source == "llm":
+        attack = alert.get("attack_type") or attack
+    sources = [source]
+    if source == "llm" and "heuristic" in str(alert.get("models") or ""):
+        sources.append("heuristic")
     row = build_incident_row(
         session_id=session_id,
         src_ip=alert.get("src_ip") or "",
@@ -179,18 +194,22 @@ def register_from_alert(session_id: str, alert: dict) -> dict:
         src_port=alert.get("src_port") or 0,
         dst_port=alert.get("dst_port") or 0,
         protocol=alert.get("protocol") or "TCP",
-        sources=[source],
+        sources=sources,
         attack_type=str(attack)[:120],
         severity=alert.get("severity") or "medium",
         confidence=float(alert.get("confidence") or alert.get("anomaly_score") or 0) / 10.0
         if alert.get("anomaly_score") and not alert.get("confidence")
         else float(alert.get("confidence") or 0.5),
-        disposition="open",
+        disposition="true_positive" if source == "llm" else "open",
         llm_merged_summary=(alert.get("explanation") or "")[:500],
+        llm_primary=alert.get("llm_primary") or {},
+        llm_secondary=alert.get("llm_secondary") or {},
+        llm_tertiary=alert.get("llm_tertiary") or {},
         alert_id=alert.get("id"),
         finding_id=alert.get("finding_id"),
         timestamp=alert.get("timestamp") or time.time(),
     )
+    row["from_ai"] = source == "llm" or bool(alert.get("from_ai"))
     return upsert_incident(session_id, row)
 
 

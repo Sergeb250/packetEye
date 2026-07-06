@@ -17,9 +17,11 @@ from app.services.capture import orchestrator as capture_orchestrator
 from app.services.detection.scoring import severity_to_score
 from app.services.live import packet_feed
 from app.services.live.alert_service import AlertService
+from app.services.live.session_utils import resolve_live_session_id
 from app.services.live.triage_heuristics import TriageHeuristics
-from app.services.live.triage_registry import build_incident_row, upsert_incident
-from app.services.llm.stack import build_live_stack, stack_model_names
+from app.services.live.triage_registry import build_incident_row, update_incident, upsert_incident
+from app.services.llm.router import get_model_router
+from app.services.llm.stack import stack_model_names
 from app.services.llm.provider import parse_json_response
 
 logger = logging.getLogger(__name__)
@@ -58,6 +60,9 @@ _state: dict = {
 
 
 def _fast_providers(config: dict) -> list[tuple[str, object]]:
+    """Legacy helper — prefer get_model_router(config)."""
+    from app.services.llm.stack import build_live_stack
+
     timeout = float(config.get("LLM_LIVE_TIMEOUT_SECONDS", 18))
     stack = build_live_stack(config, max_models=3)
     n = len(stack) or 1
@@ -229,7 +234,16 @@ def _register_triage_row(
     return upsert_incident(session_id, row)
 
 
-def _emit_llm_packet_alert(app: Flask, session_id: str, packet: dict, verdict: dict) -> None:
+def _emit_llm_packet_alert(
+    app: Flask,
+    session_id: str,
+    packet: dict,
+    verdict: dict,
+    *,
+    primary: dict | None = None,
+    secondary: dict | None = None,
+    tertiary: dict | None = None,
+) -> dict | None:
     with app.app_context():
         config = dict(app.config)
         lab = bool(config.get("CAPTURE_LAB_ENABLED"))
@@ -246,12 +260,16 @@ def _emit_llm_packet_alert(app: Flask, session_id: str, packet: dict, verdict: d
             "id": str(uuid.uuid4()),
             "session_id": session_id,
             "type": "llm",
+            "from_ai": True,
             "timestamp": time.time(),
             "severity": severity,
             "explanation": summary,
             "attack_type": attack,
             "confidence": conf,
             "models": verdict.get("models"),
+            "llm_primary": primary or {},
+            "llm_secondary": secondary or {},
+            "llm_tertiary": tertiary or {},
             "src_ip": packet.get("src_ip"),
             "dst_ip": packet.get("dst_ip"),
             "src_port": packet.get("src_port"),
@@ -263,13 +281,14 @@ def _emit_llm_packet_alert(app: Flask, session_id: str, packet: dict, verdict: d
             analysis_id=session_id,
             rule_id="LLM-PACKET-001",
             source="llm",
-            title=f"LLM packet triage — {attack}",
+            title=f"AI triage — {attack}",
             description=summary,
             severity=severity,
             severity_score=severity_to_score(severity),
             evidence={
                 "live": True,
                 "llm_packet": True,
+                "from_ai": True,
                 "confidence": conf,
                 "models": verdict.get("models"),
                 "packet_info": packet.get("info"),
@@ -284,6 +303,7 @@ def _emit_llm_packet_alert(app: Flask, session_id: str, packet: dict, verdict: d
         from app.services.live.triage_registry import register_from_alert
 
         register_from_alert(session_id, alert)
+        return alert
 
 
 def _emit_heuristic_alert(app: Flask, session_id: str, packet: dict, hit: dict) -> None:
@@ -298,18 +318,7 @@ def _emit_heuristic_alert(app: Flask, session_id: str, packet: dict, hit: dict) 
 
 
 def _resolve_session_id(config: dict, session_id: str | None) -> str | None:
-    if session_id:
-        return session_id
-    sid = capture_orchestrator.get_ml_session_id(config)
-    if sid:
-        return sid
-    from app.services.live.monitor import monitor_status
-    from app.models.analysis import Analysis
-
-    latest = Analysis.query.filter_by(source="live").order_by(Analysis.created_at.desc()).first()
-    if latest and monitor_status(latest.id).get("running"):
-        return latest.id
-    return None
+    return resolve_live_session_id(config, session_id)
 
 
 def _analysis_loop(app: Flask, poll_sec: float) -> None:
@@ -322,7 +331,7 @@ def _analysis_loop(app: Flask, poll_sec: float) -> None:
     with app.app_context():
         config = dict(app.config)
         interval = max(2.0, 60.0 / max(1, int(config.get("LLM_LIVE_PACKETS_PER_MIN", 30))))
-        providers = _fast_providers(config)
+        router = get_model_router(config)
 
         while not stop_event.is_set():
             try:
@@ -340,18 +349,9 @@ def _analysis_loop(app: Flask, poll_sec: float) -> None:
                 if heuristic_hit:
                     sources.append("heuristic")
 
-                results: list[dict] = []
-                errors: list[str] = []
-                model_outputs: dict[str, dict] = {}
-                for name, prov in providers:
-                    n, parsed, err = _call_model(name, prov, packet_json)
-                    if err:
-                        errors.append(f"{name}: {err}")
-                    if parsed:
-                        results.append(parsed)
-                        model_outputs[name] = parsed
-                    if err and "429" in str(err).lower():
-                        break
+                user = PACKET_USER.format(packet=packet_json, cic_labels=", ".join(CIC_LABELS))
+                model_outputs, errors = router.parallel_triage(PACKET_SYSTEM, user, temperature=0.1)
+                results = list(model_outputs.values())
 
                 primary, secondary, tertiary = _map_model_outputs(model_outputs)
 
@@ -383,7 +383,10 @@ def _analysis_loop(app: Flask, poll_sec: float) -> None:
                 _state["stats"]["rows_logged"] = _state["stats"].get("rows_logged", 0) + 1
 
                 if verdict and verdict.get("suspicious"):
-                    _emit_llm_packet_alert(app, session_id, pkt, verdict)
+                    _emit_llm_packet_alert(
+                        app, session_id, pkt, verdict,
+                        primary=primary, secondary=secondary, tertiary=tertiary,
+                    )
                     _state["stats"]["alerts_emitted"] = _state["stats"].get("alerts_emitted", 0) + 1
                 elif heuristic_hit and float(heuristic_hit.get("confidence") or 0) >= 0.75:
                     _emit_heuristic_alert(app, session_id, pkt, heuristic_hit)
@@ -456,12 +459,12 @@ def set_llm_packet_analysis(app: Flask, *, enabled: bool, session_id: str | None
         )
         _state["thread"] = thread
         thread.start()
-        stack = build_live_stack(config, max_models=3)
+        router = get_model_router(config)
         status = {
             "enabled": True,
             "session_id": sid,
             "packets_per_min": int(config.get("LLM_LIVE_PACKETS_PER_MIN", 30)),
-            "models_per_packet": len(stack),
+            "models_per_packet": len(router.stack),
             "model_stack": stack_model_names(config),
         }
         _cache_status(status)

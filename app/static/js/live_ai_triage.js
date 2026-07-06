@@ -29,7 +29,37 @@
         return window.sessionId || liveConfig?.active_session?.session_id;
     }
 
-    function sourceBadges(sources) {
+    async function resolveSessionId() {
+        let sid = window.sessionId || liveConfig?.active_session?.session_id;
+        if (sid) return sid;
+        try {
+            const st = await fetch('/api/live/triage/status').then((r) => r.json());
+            sid = st.session_id || st.llm_packet_triage?.session_id;
+            if (sid) {
+                window.sessionId = sid;
+                return sid;
+            }
+            const cfg = await fetch('/api/live/config').then((r) => r.json());
+            sid = cfg.active_session?.session_id;
+            if (sid) window.sessionId = sid;
+            return sid || null;
+        } catch {
+            return null;
+        }
+    }
+
+    function showNoSessionHint() {
+        const tbody = document.getElementById('aiTriageBody');
+        if (!tbody) return;
+        tbody.innerHTML = `<tr><td colspan="12" class="empty-state py-4 text-center text-muted">
+            Start <strong>ML Live Monitor</strong> on the ML tab, then enable <strong>Live triage</strong> above.
+            AI alerts also appear on the <a href="/live/overview">SOC Console</a> with an <span class="badge bg-info text-dark">AI</span> badge.
+        </td></tr>`;
+        const cnt = document.getElementById('aiTriageRowCount');
+        if (cnt) cnt.textContent = '0 rows';
+    }
+
+    function sourceBadges(sources, fromAi) {
         const map = {
             suricata: 'bg-warning text-dark',
             ml: 'bg-primary',
@@ -37,10 +67,15 @@
             correlation: 'bg-danger',
             heuristic: 'bg-secondary',
         };
-        return (sources || []).map((s) => {
+        let html = (sources || []).map((s) => {
             const cls = map[s] || 'bg-secondary';
-            return `<span class="badge ${cls} me-1">${esc(s.toUpperCase())}</span>`;
+            const label = s === 'llm' ? 'AI' : s.toUpperCase();
+            return `<span class="badge ${cls} me-1">${esc(label)}</span>`;
         }).join('');
+        if (fromAi && !(sources || []).includes('llm')) {
+            html += '<span class="badge bg-info text-dark me-1">AI</span>';
+        }
+        return html || '<span class="text-muted">—</span>';
     }
 
     function dispBadge(d) {
@@ -145,7 +180,7 @@
                 <td><button type="button" class="btn btn-link btn-sm p-0 ai-btn-expand" data-id="${esc(row.id)}"><i class="bi bi-chevron-${exp ? 'down' : 'right'}"></i></button></td>
                 <td class="small font-monospace">${fmtTime(row.timestamp)}</td>
                 <td class="small font-monospace">${esc(fmtEp(row))}</td>
-                <td>${sourceBadges(row.sources)}</td>
+                <td>${sourceBadges(row.sources, row.from_ai)}</td>
                 <td class="small">${esc(row.attack_type || '—')}</td>
                 <td>${sevBadge(row.severity)}</td>
                 <td>${dispBadge(row.disposition)}</td>
@@ -189,8 +224,11 @@
     }
 
     async function pollIncidents() {
-        const sessionId = sid();
-        if (!sessionId) return;
+        const sessionId = await resolveSessionId();
+        if (!sessionId) {
+            showNoSessionHint();
+            return;
+        }
         const source = document.getElementById('aiFilterSource')?.value || '';
         const disposition = document.getElementById('aiFilterDisposition')?.value || '';
         const search = document.getElementById('aiFilterSearch')?.value || '';
@@ -210,13 +248,14 @@
             }
             if (stRes.ok) {
                 const st = await stRes.json();
+                if (st.session_id && !window.sessionId) window.sessionId = st.session_id;
                 updateKpis(st.registry, st.llm_packet_triage);
             }
         } catch { /* ignore */ }
     }
 
     async function toggleTriage(enabled) {
-        const sessionId = sid();
+        const sessionId = await resolveSessionId();
         try {
             const res = await fetch('/api/live/llm-packets', {
                 method: 'POST',
@@ -304,6 +343,12 @@
             if (toggle) toggle.checked = !!d.running;
             updateKpis({}, d);
         }).catch(() => {});
+        setInterval(() => {
+            if (!window.sessionId && liveConfig?.active_session?.session_id) {
+                window.sessionId = liveConfig.active_session.session_id;
+                pollIncidents();
+            }
+        }, 4000);
     });
 
     window.addEventListener('beforeunload', () => { if (pollTimer) clearInterval(pollTimer); });

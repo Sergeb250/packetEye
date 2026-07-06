@@ -29,6 +29,7 @@ from app.services.live.triage_registry import (
     summary_stats,
     update_incident,
 )
+from app.services.live.session_utils import resolve_live_session_id
 from app.services.live.triage_inspector import deep_inspect_incident
 from app.services.llm.connectivity import probe_llm_connectivity
 from app.services.llm.suricata_rule_writer import generate_suricata_rules
@@ -538,9 +539,9 @@ def live_llm_packets():
 @limiter.exempt
 @api_bp.route("/live/triage/incidents")
 def live_triage_incidents():
-    session_id = request.args.get("session_id")
+    session_id = resolve_live_session_id(dict(current_app.config), request.args.get("session_id"))
     if not session_id:
-        return jsonify({"error": "session_id required"}), 400
+        return jsonify({"error": "No active live session. Start ML monitor or enable live triage.", "incidents": [], "count": 0}), 200
     since = request.args.get("since", 0, type=float)
     disposition = (request.args.get("disposition") or "").strip() or None
     source = (request.args.get("source") or "").strip() or None
@@ -598,10 +599,10 @@ def live_triage_verdict():
 @limiter.exempt
 @api_bp.route("/live/triage/status")
 def live_triage_status():
-    session_id = request.args.get("session_id")
+    session_id = resolve_live_session_id(dict(current_app.config), request.args.get("session_id"))
     llm = llm_packet_analysis_status()
     stats = summary_stats(session_id) if session_id else {"total": 0, "by_disposition": {}, "by_source": {}}
-    return jsonify({"llm_packet_triage": llm, "registry": stats})
+    return jsonify({"llm_packet_triage": llm, "registry": stats, "session_id": session_id})
 
 
 @api_bp.route("/suricata/rules/generate", methods=["POST"])

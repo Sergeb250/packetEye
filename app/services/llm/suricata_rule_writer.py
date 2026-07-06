@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import re
 
-from app.services.llm.ensemble import get_llm_ensemble
 from app.services.llm.tokens import with_tier
 
 logger = logging.getLogger(__name__)
@@ -49,8 +48,10 @@ def generate_suricata_rules(config: dict, description: str, existing_content: st
         return {"ok": False, "error": "Describe what you want to detect."}
     if not config.get("LLM_ENABLED", True):
         return {"ok": False, "error": "LLM disabled (LLM_ENABLED=false)."}
-    if not (config.get("LLM_API_KEY") or config.get("NVIDIA_API_KEY")):
-        return {"ok": False, "error": "No NVIDIA_API_KEY configured."}
+    if not (config.get("ZAI_API_KEY") or config.get("LLM_API_KEY") or config.get("NVIDIA_API_KEY")):
+        return {"ok": False, "error": "No LLM API key configured (set ZAI_API_KEY and/or NVIDIA_API_KEY)"}
+
+    from app.services.llm.router import get_model_router
 
     existing = (existing_content or "").strip()
     hint_sid = _next_sid_hint(existing)
@@ -66,15 +67,20 @@ def generate_suricata_rules(config: dict, description: str, existing_content: st
         },
         "medium",
     )
-    ensemble = get_llm_ensemble(fast_cfg)
-    parsed = ensemble.complete_json(
+    router = get_model_router(fast_cfg)
+    best, model_outputs, errors = router.complete_json(
+        "suricata_rule",
         RULE_GEN_SYSTEM,
         user,
         temperature=0.15,
-        cache_prefix="suricata_rule:gen",
+        parallel=False,
     )
+    parsed = best
+    if not parsed and model_outputs:
+        parsed = next(iter(model_outputs.values()), None)
     if not parsed:
-        return {"ok": False, "error": "LLM returned no rule — test NVIDIA models and retry."}
+        err = "; ".join(errors[:2]) if errors else "LLM returned no rule"
+        return {"ok": False, "error": err}
 
     rules_text = str(parsed.get("rules") or "").strip()
     if not rules_text or "alert" not in rules_text.lower():

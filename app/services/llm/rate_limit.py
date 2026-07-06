@@ -11,7 +11,14 @@ logger = logging.getLogger(__name__)
 
 _lock = threading.Lock()
 _last_call_at = 0.0
-_backoff_until: dict[str, float] = {"nvidia": 0.0, "openrouter": 0.0, "default": 0.0}
+_backoff_until: dict[str, float] = {
+    "zai": 0.0,
+    "nvidia": 0.0,
+    "openrouter": 0.0,
+    "default": 0.0,
+}
+_provider_last_at: dict[str, float] = {}
+_provider_sems: dict[str, threading.Semaphore] = {}
 
 # Default 1 concurrent call — avoids NVIDIA 429 when primary+secondary fire together.
 _MAX_CONCURRENT = int(__import__("os").environ.get("LLM_MAX_CONCURRENT", "1"))
@@ -96,4 +103,31 @@ class llm_call_slot:
         with _lock:
             _last_call_at = time.monotonic()
         _semaphore.release()
+        return False
+
+
+class provider_call_slot:
+    """Per-provider slot — Z.ai, NVIDIA, and OpenRouter can run in parallel."""
+
+    def __init__(self, provider_label: str = "nvidia"):
+        self.key = _provider_key(provider_label)
+
+    def _sem(self) -> threading.Semaphore:
+        if self.key not in _provider_sems:
+            _provider_sems[self.key] = threading.Semaphore(1)
+        return _provider_sems[self.key]
+
+    def __enter__(self):
+        wait_if_backoff(self.key)
+        self._sem().acquire()
+        with _lock:
+            gap = _MIN_INTERVAL - (time.monotonic() - _provider_last_at.get(self.key, 0.0))
+        if gap > 0:
+            time.sleep(gap)
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        with _lock:
+            _provider_last_at[self.key] = time.monotonic()
+        self._sem().release()
         return False

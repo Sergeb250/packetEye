@@ -44,9 +44,9 @@
 
         if (a.type === 'llm') {
             return {
-                headline: `AI triage — ${a.attack_type || 'suspicious packet'}`,
-                body: `${a.explanation || 'Dual-model LLM flagged this packet.'} Confidence: ${a.confidence != null ? Math.round(a.confidence * 100) + '%' : 'n/a'}. Models: ${a.models || 'primary+secondary'}.`,
-                action: 'Open AI Triage for per-model JSON and analyst verdicts.',
+                headline: `AI alert — ${a.attack_type || 'suspicious traffic'}`,
+                body: `${a.explanation || '3-model AI triage flagged this connection.'} Confidence: ${a.confidence != null ? Math.round(a.confidence * 100) + '%' : 'n/a'}. Models: ${a.models || 'Z.ai+NVIDIA'}.`,
+                action: 'Review AI Triage tab for per-model JSON and set TP/FP/TN verdict.',
             };
         }
         if (a.type === 'correlation') {
@@ -106,7 +106,7 @@
         const map = {
             suricata: '<span class="badge bg-warning text-dark">IDS</span>',
             ml: '<span class="badge bg-primary">ML</span>',
-            llm: '<span class="badge bg-info text-dark">LLM</span>',
+            llm: '<span class="badge bg-info text-dark"><i class="bi bi-robot"></i> AI</span>',
             correlation: '<span class="badge bg-danger">CORR</span>',
         };
         return map[a.type] || map.ml;
