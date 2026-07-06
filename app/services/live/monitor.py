@@ -13,11 +13,14 @@ from app.services.detection.ml_engine import MLEngine
 from app.services.live.alert_service import AlertService
 from app.services.live.correlation import LiveCorrelator
 from app.services.live.suricata_consumer import SuricataConsumer
+from app.services.live.scapy_flow_monitor import ScapyFlowMonitor
+from app.services.detection.engine import WhitelistEngine
 from app.services.live.webhook_notifier import WebhookNotifier
 
 logger = logging.getLogger(__name__)
 
 _active_monitors: dict[str, threading.Thread] = {}
+_monitor_instances: dict[str, "LiveMonitor"] = {}
 _stop_flags: dict[str, threading.Event] = {}
 
 
@@ -26,11 +29,21 @@ class LiveMonitor:
         self.config = config
         self.session_id = session_id
         analysis = Analysis.query.get(session_id)
-        eve_path = (analysis.summary_json or {}).get("eve_path") if analysis else None
-        self.consumer = SuricataConsumer(
-            eve_path or config.get("SURICATA_EVE_PATH", ""),
-            entropy_window=int(config.get("LIVE_PORT_ENTROPY_WINDOW", 300)),
-        )
+        summary = (analysis.summary_json or {}) if analysis else {}
+        source = summary.get("capture_source") or summary.get("source_mode") or "suricata"
+        self.source = source
+
+        if source == "scapy":
+            idle = float(config.get("SCAPY_FLOW_IDLE_SEC", 5))
+            self.consumer = None
+            self.scapy_monitor = ScapyFlowMonitor(idle_seconds=idle)
+        else:
+            eve_path = summary.get("eve_path") or config.get("SURICATA_EVE_PATH", "")
+            self.consumer = SuricataConsumer(
+                eve_path,
+                entropy_window=int(config.get("LIVE_PORT_ENTROPY_WINDOW", 300)),
+            )
+            self.scapy_monitor = None
         self.ml = MLEngine(
             model_path=Path(config.get("ML_MODEL_PATH", "")),
             scaler_path=Path(config.get("ML_SCALER_PATH", "")),
@@ -46,6 +59,7 @@ class LiveMonitor:
             rate_limit_per_minute=int(config.get("LIVE_ALERT_RATE_LIMIT", 60)),
             threshold=float(config.get("ML_ANOMALY_THRESHOLD", 5.0)),
             webhook=webhook if webhook.enabled else None,
+            whitelist=WhitelistEngine(Path(config.get("WHITELIST_PATH", ""))),
         )
         self.correlator = LiveCorrelator(
             window_seconds=int(config.get("LIVE_CORRELATION_WINDOW", 120))
@@ -69,7 +83,10 @@ class LiveMonitor:
             kickoff_investigation(current_app._get_current_object(), alert["finding_id"])
 
     def process_batch(self) -> int:
-        events = self.consumer.poll_events()
+        if self.scapy_monitor:
+            events = self.scapy_monitor.poll_events()
+        else:
+            events = self.consumer.poll_events()
         flows = events["flows"]
 
         if self.ingest_suricata_alerts:
@@ -163,7 +180,11 @@ def start_monitor(app, session_id: str) -> bool:
     def _target():
         with app.app_context():
             monitor = LiveMonitor(dict(app.config), session_id)
-            monitor.run_loop(stop_event)
+            _monitor_instances[session_id] = monitor
+            try:
+                monitor.run_loop(stop_event)
+            finally:
+                _monitor_instances.pop(session_id, None)
 
     thread = threading.Thread(target=_target, daemon=True, name=f"live-{session_id[:8]}")
     _active_monitors[session_id] = thread
@@ -181,6 +202,21 @@ def stop_monitor(session_id: str) -> bool:
         thread.join(timeout=10)
     _active_monitors.pop(session_id, None)
     _stop_flags.pop(session_id, None)
+    return True
+
+
+def rebind_eve(session_id: str, eve_path: str) -> bool:
+    """Point a running live session at a new EVE file without restarting Suricata."""
+    analysis = Analysis.query.get(session_id)
+    if not analysis:
+        return False
+    summary = dict(analysis.summary_json or {})
+    summary["eve_path"] = eve_path
+    analysis.summary_json = summary
+    db.session.commit()
+    mon = _monitor_instances.get(session_id)
+    if mon and mon.consumer:
+        mon.consumer.rebind(eve_path)
     return True
 
 

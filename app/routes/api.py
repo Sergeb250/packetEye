@@ -16,13 +16,21 @@ from app.services.live_runner import kickoff_live_monitor_current
 from app.services.ml_dashboard import build_live_monitor_context
 from app.tasks.live_tasks import create_live_session, stop_live_monitor_task
 from app.services.live.alert_service import AlertService
-from app.services.live.monitor import monitor_status, stop_monitor
+from app.services.live.monitor import monitor_status, stop_monitor, rebind_eve
 from app.services.live import suricata_manager
 from app.services.live.webhook_notifier import WebhookNotifier
 from app.services.capture import orchestrator as capture_orchestrator
+from app.services.capture import ml_capture
 from app.services.capture import pcap_watcher
 from app.services.live import packet_feed
-from app.services.investigation.service import get_investigation, kickoff_investigation
+from app.services.investigation.service import (
+    get_flow_investigation,
+    get_investigation,
+    investigate_flow_sync,
+    investigate_target_sync,
+    kickoff_investigation,
+    refresh_analysis_metrics,
+)
 from app.services.llm import chat as soc_chat
 from app.services.ml_dashboard import build_dashboard_context
 
@@ -294,20 +302,41 @@ def live_start():
         auto_capture = bool(auto_capture)
     capture_started = False
 
-    # tcpdump fallback: rotating PCAP chunks auto-analyzed by the watcher —
-    # no EVE tail and no per-session monitor thread.
+    # tcpdump: rotating PCAP chunks + live ML from Scapy packet feed
     if mode == "tcpdump":
-        result = capture_orchestrator.start_capture(config, mode="tcpdump", interface=interface)
-        if not result.get("ok"):
-            return jsonify({"error": result.get("error")}), 400
+        iface = interface or config.get("CAPTURE_INTERFACE") or config.get("SURICATA_INTERFACE") or "eth0"
+        cap_status = capture_orchestrator.capture_status(config)
+        if not cap_status.get("running"):
+            result = capture_orchestrator.start_capture(config, mode="tcpdump", interface=iface)
+            if not result.get("ok"):
+                err = {"error": result.get("error")}
+                if result.get("hint"):
+                    err["hint"] = result["hint"]
+                return jsonify(err), 400
+            if result.get("chunk_dir"):
+                config["TCPDUMP_CHUNK_DIR"] = result["chunk_dir"]
+        else:
+            result = {
+                "ok": True,
+                "pid": cap_status.get("pid"),
+                "interface": cap_status.get("interface") or iface,
+            }
+            iface = result["interface"]
+
         pcap_watcher.start_watcher(current_app._get_current_object())
+        packet_feed.start_feed(config, "tcpdump", iface)
+        ml = ml_capture.attach_ml_to_capture(config, "tcpdump", iface)
+
         return jsonify(
             {
                 "mode": "tcpdump",
                 "status": "capturing",
                 "pid": result.get("pid"),
                 "chunk_dir": config.get("TCPDUMP_CHUNK_DIR"),
-                "note": "Closed chunks are analyzed automatically; results appear under Analyses.",
+                "session_id": ml.get("session_id"),
+                "ml_status": ml.get("status"),
+                "interface": iface,
+                "note": "Live ML scores Scapy flows; closed chunks also appear under Analyses.",
             }
         ), 201
 
@@ -382,6 +411,56 @@ def live_stop():
     return jsonify({"session_id": session_id, "status": "stopped"})
 
 
+@api_bp.route("/live/rebind-eve", methods=["POST"])
+@limiter.limit("30 per hour")
+def live_rebind_eve():
+    data = request.get_json() or {}
+    session_id = data.get("session_id") or request.args.get("session_id")
+    eve_path = (data.get("eve_path") or "").strip()
+    if not session_id or not eve_path:
+        return jsonify({"error": "session_id and eve_path required"}), 400
+    path = Path(eve_path).expanduser()
+    if not path.is_file():
+        return jsonify({"error": f"EVE file not found: {path}"}), 400
+    if not rebind_eve(session_id, str(path.resolve())):
+        return jsonify({"error": "Session not found"}), 404
+    from app.services.live import packet_feed
+    packet_feed.rebind_eve(str(path.resolve()))
+    return jsonify({"ok": True, "session_id": session_id, "eve_path": str(path.resolve())})
+
+
+@api_bp.route("/live/import-eve", methods=["POST"])
+@limiter.limit("10 per hour")
+def live_import_eve():
+    config = dict(current_app.config)
+    max_bytes = int(config.get("EVE_IMPORT_MAX_MB", 100)) * 1024 * 1024
+    import_dir = Path(config.get("UPLOAD_FOLDER", "data/uploads")).parent / "imports"
+    import_dir.mkdir(parents=True, exist_ok=True)
+
+    if request.files.get("file"):
+        f = request.files["file"]
+        if f.content_length and f.content_length > max_bytes:
+            return jsonify({"error": "File too large"}), 400
+        dest = import_dir / f"eve_{int(__import__('time').time())}.json"
+        f.save(dest)
+        eve_path = str(dest.resolve())
+    else:
+        data = request.get_json() or {}
+        raw_path = (data.get("eve_path") or "").strip()
+        if not raw_path:
+            return jsonify({"error": "file or eve_path required"}), 400
+        src = Path(raw_path).expanduser()
+        if not src.is_file():
+            return jsonify({"error": f"File not found: {src}"}), 400
+        if src.stat().st_size > max_bytes:
+            return jsonify({"error": "File too large"}), 400
+        dest = import_dir / f"eve_{int(__import__('time').time())}.json"
+        dest.write_bytes(src.read_bytes())
+        eve_path = str(dest.resolve())
+
+    return jsonify({"ok": True, "eve_path": eve_path}), 201
+
+
 @limiter.exempt
 @api_bp.route("/live/status")
 def live_status():
@@ -396,9 +475,17 @@ def live_status():
 def live_alerts():
     session_id = request.args.get("session_id")
     since = request.args.get("since", 0, type=float)
+    severity_q = (request.args.get("severity") or "").strip().lower()
+    source_q = (request.args.get("source") or "").strip().lower()
     if not session_id:
         return jsonify({"error": "session_id required"}), 400
     alerts = AlertService.get_alerts(session_id, since_ts=since)
+    if severity_q:
+        allowed = {s.strip() for s in severity_q.split(",") if s.strip()}
+        alerts = [a for a in alerts if (a.get("severity") or "").lower() in allowed]
+    if source_q:
+        allowed = {s.strip() for s in source_q.split(",") if s.strip()}
+        alerts = [a for a in alerts if (a.get("type") or "").lower() in allowed]
     return jsonify({"alerts": alerts, "count": len(alerts)})
 
 
@@ -502,25 +589,40 @@ def capture_start():
         return jsonify(err), 400
     if result.get("chunk_dir"):
         current_app.config["TCPDUMP_CHUNK_DIR"] = result["chunk_dir"]
-    if result.get("mode") == "tcpdump":
+    mode = result.get("mode") or "suricata"
+    iface = result.get("interface") or data.get("interface") or ""
+    if mode == "tcpdump":
         pcap_watcher.start_watcher(current_app._get_current_object())
     packet_feed.start_feed(
         dict(current_app.config),
-        mode=result.get("mode") or "suricata",
-        interface=result.get("interface") or data.get("interface") or "",
+        mode=mode,
+        interface=iface,
         eve_path=result.get("eve_hint"),
     )
+    ml = ml_capture.attach_ml_to_capture(
+        dict(current_app.config),
+        mode,
+        iface,
+        eve_hint=result.get("eve_hint"),
+    )
+    result["session_id"] = ml.get("session_id")
+    result["ml_status"] = ml.get("status")
     return jsonify(result), 201
 
 
 @api_bp.route("/capture/stop", methods=["POST"])
 @limiter.limit("20 per hour")
 def capture_stop():
+    config = dict(current_app.config)
+    ml_result = ml_capture.stop_ml_for_capture(config)
     packet_feed.stop_feed()
-    result = capture_orchestrator.stop_capture(dict(current_app.config))
+    result = capture_orchestrator.stop_capture(config)
     pcap_watcher.stop_watcher()
     if not result.get("ok"):
         return jsonify({"error": result.get("error")}), 400
+    result["ml_stopped"] = ml_result.get("stopped", False)
+    if ml_result.get("session_id"):
+        result["ml_session_id"] = ml_result["session_id"]
     return jsonify(result)
 
 
@@ -544,6 +646,68 @@ def investigation_result(finding_id):
     return jsonify(result)
 
 
+@api_bp.route("/investigate/flow/<flow_id>", methods=["POST"])
+@limiter.limit("30 per hour")
+def investigate_flow(flow_id):
+    result = investigate_flow_sync(dict(current_app.config), flow_id)
+    if not result.get("ok"):
+        return jsonify({"error": result.get("error")}), 400
+    return jsonify(result), 202 if result.get("investigation", {}).get("status") == "running" else 200
+
+
+@limiter.exempt
+@api_bp.route("/investigate/flow/<flow_id>", methods=["GET"])
+def investigation_flow_result(flow_id):
+    result = get_flow_investigation(flow_id)
+    if not result.get("ok"):
+        return jsonify({"error": result.get("error")}), 404
+    return jsonify(result)
+
+
+@api_bp.route("/investigate/target/<analysis_id>/<path:target>", methods=["GET"])
+@limiter.limit("60 per hour")
+def investigate_target(analysis_id, target):
+    Analysis.query.get_or_404(analysis_id)
+    target = target.strip()
+    target_type = "domain"
+    try:
+        import ipaddress
+        ipaddress.ip_address(target)
+        target_type = "ip"
+    except ValueError:
+        if "." not in target:
+            return jsonify({"error": "Invalid target"}), 400
+    result = investigate_target_sync(dict(current_app.config), analysis_id, target_type, target)
+    if not result.get("ok"):
+        return jsonify({"error": result.get("error")}), 400
+    return jsonify(result)
+
+
+@limiter.exempt
+@api_bp.route("/analysis/<analysis_id>/metrics")
+def analysis_metrics(analysis_id):
+    result = refresh_analysis_metrics(analysis_id)
+    if not result.get("ok"):
+        return jsonify({"error": result.get("error")}), 404
+    return jsonify(result)
+
+
+@api_bp.route("/analysis/<analysis_id>/refresh-report", methods=["POST"])
+@limiter.limit("20 per hour")
+def refresh_report_metrics(analysis_id):
+    analysis = Analysis.query.get_or_404(analysis_id)
+    metrics = refresh_analysis_metrics(analysis_id)
+    report = dict(analysis.report_json or {})
+    report["risk_score"] = metrics["risk_score"]
+    report.setdefault("metrics", {})
+    report["metrics"]["malicious_observables"] = metrics["malicious_observables"]
+    report["metrics"]["investigated_count"] = metrics["investigated_count"]
+    analysis.report_json = report
+    analysis.risk_score = metrics["risk_score"]
+    db.session.commit()
+    return jsonify({"ok": True, "metrics": metrics})
+
+
 @api_bp.route("/chat", methods=["POST"])
 @limiter.limit("60 per hour")
 def chat():
@@ -556,6 +720,8 @@ def chat():
         history=data.get("history") or [],
         analysis_id=data.get("analysis_id"),
         finding_id=data.get("finding_id"),
+        flow_id=data.get("flow_id"),
+        context_payload=data.get("context_payload"),
     )
     if not result.get("ok"):
         return jsonify({"error": result.get("error")}), 400
@@ -598,6 +764,61 @@ def suricata_monitor():
             "status": suricata_manager.get_status(config),
         }
     )
+
+
+@limiter.exempt
+@api_bp.route("/suricata/export")
+def suricata_export():
+    import csv
+    import io
+
+    since = request.args.get("since", 0, type=int)
+    fmt = (request.args.get("format") or "json").lower()
+    config = dict(current_app.config)
+    events = suricata_manager.poll_monitor_events(config, since_id=since)
+    if fmt == "csv":
+        buf = io.StringIO()
+        writer = csv.DictWriter(buf, fieldnames=[
+            "id", "timestamp", "src_ip", "src_port", "dst_ip", "dst_port",
+            "protocol", "length", "info", "severity", "event_type",
+        ])
+        writer.writeheader()
+        for ev in events:
+            writer.writerow({k: ev.get(k) for k in writer.fieldnames})
+        return buf.getvalue(), 200, {"Content-Type": "text/csv", "Content-Disposition": "attachment; filename=suricata_eve.csv"}
+    return jsonify({"events": events, "count": len(events)})
+
+
+@limiter.exempt
+@api_bp.route("/capture/export-packets")
+def capture_export_packets():
+    import csv
+    import io
+
+    from app.services.live import packet_feed
+
+    fmt = (request.args.get("format") or "json").lower()
+    since = request.args.get("since", 0, type=int)
+    rows = packet_feed.poll_packets(since)
+    if fmt == "csv":
+        buf = io.StringIO()
+        if rows:
+            writer = csv.DictWriter(buf, fieldnames=list(rows[0].keys()))
+            writer.writeheader()
+            writer.writerows(rows)
+        return buf.getvalue(), 200, {"Content-Type": "text/csv", "Content-Disposition": "attachment; filename=capture_packets.csv"}
+    return jsonify({"packets": rows, "count": len(rows)})
+
+
+@limiter.exempt
+@api_bp.route("/capture/download-chunks")
+def capture_download_chunks():
+    from app.services.capture.orchestrator import capture_status, list_tcpdump_chunks
+
+    config = dict(current_app.config)
+    status = capture_status(config)
+    chunks = list_tcpdump_chunks(config)
+    return jsonify({"mode": status.get("mode"), "chunks": chunks})
 
 
 @api_bp.route("/suricata/preflight", methods=["POST"])
@@ -666,6 +887,153 @@ def ml_benchmark():
     if not path.exists():
         return jsonify({"error": "No benchmark results. Run scripts/evaluate_model.py"}), 404
     return jsonify(json.loads(path.read_text(encoding="utf-8")))
+
+
+from app.services.lab.patterns import ALL_LAB_PATTERNS
+
+
+def _parse_patterns(data: dict) -> list[str] | None:
+    raw = data.get("patterns")
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        if raw.strip().lower() == "all":
+            return None
+        return [p.strip() for p in raw.split(",") if p.strip()]
+    if isinstance(raw, list) and (not raw or (len(raw) == 1 and str(raw[0]).lower() == "all")):
+        return None
+    return raw
+
+
+@api_bp.route("/lab/start", methods=["POST"])
+@limiter.limit("20 per hour")
+def lab_start():
+    if not current_app.config.get("CAPTURE_LAB_ENABLED"):
+        return jsonify({
+            "error": "Lab traffic disabled. Set CAPTURE_LAB_ENABLED=true in .env (sensor/lab only).",
+        }), 403
+    from app.config import BASE_DIR
+    from app.services.lab import traffic_runner
+
+    data = request.get_json() or {}
+    patterns = _parse_patterns(data)
+    rotate_sec = int(data.get("rotate_sec") or current_app.config.get("LAB_ROTATE_SEC") or 12)
+    iface = (data.get("interface") or "").strip() or current_app.config.get("CAPTURE_INTERFACE") or "eth0"
+    script = BASE_DIR / "scripts" / "generate_test_traffic.py"
+    result = traffic_runner.start_lab_traffic(script, patterns, iface, rotate_sec=rotate_sec)
+    if not result.get("ok"):
+        return jsonify({"error": result.get("error")}), 400
+    return jsonify(result), 201
+
+
+@api_bp.route("/lab/stop", methods=["POST"])
+@limiter.limit("30 per hour")
+def lab_stop():
+    from app.services.lab import traffic_runner
+
+    return jsonify(traffic_runner.stop_lab_traffic())
+
+
+@limiter.exempt
+@api_bp.route("/lab/status")
+def lab_status_route():
+    from app.services.lab import traffic_runner
+
+    return jsonify(traffic_runner.lab_status())
+
+
+@api_bp.route("/lab/generate-traffic", methods=["POST"])
+@limiter.limit("5 per hour")
+def lab_generate_traffic():
+    """One-shot lab run (legacy). Prefer /api/lab/start for start/stop + live log."""
+    if not current_app.config.get("CAPTURE_LAB_ENABLED"):
+        return jsonify({
+            "error": "Lab traffic disabled. Set CAPTURE_LAB_ENABLED=true in .env (sensor/lab only).",
+        }), 403
+    import subprocess
+    import sys
+
+    from app.config import BASE_DIR
+
+    data = request.get_json() or {}
+    patterns = _parse_patterns(data) or list(ALL_LAB_PATTERNS)
+    iface = (data.get("interface") or "").strip() or current_app.config.get("CAPTURE_INTERFACE") or "eth0"
+    duration = int(data.get("duration_sec") or 30)
+    script = BASE_DIR / "scripts" / "generate_test_traffic.py"
+    if not script.is_file():
+        return jsonify({"error": "scripts/generate_test_traffic.py not found"}), 500
+    cmd = [
+        sys.executable,
+        str(script),
+        "--interface", iface,
+        "--duration", str(duration),
+        "--pattern", ",".join(patterns),
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=duration + 60, cwd=str(script.parent.parent))
+        log = (proc.stdout or "") + (proc.stderr or "")
+        return jsonify({
+            "ok": proc.returncode == 0,
+            "log": log[-4000:] or f"exit {proc.returncode}",
+            "patterns": patterns,
+            "interface": iface,
+        }), 200 if proc.returncode == 0 else 500
+    except subprocess.TimeoutExpired:
+        return jsonify({"error": "Lab traffic generator timed out"}), 504
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@api_bp.route("/nids-test/start", methods=["POST"])
+@limiter.limit("10 per hour")
+def nids_test_start():
+    """Start long-running NIDS + ML soak test (capture, optional lab traffic, alert polling)."""
+    from app.services.lab import nids_test_runner
+
+    config = dict(current_app.config)
+    data = request.get_json() or {}
+    patterns = _parse_patterns(data)
+    auto_capture = data.get("auto_capture")
+    if auto_capture is not None:
+        auto_capture = bool(auto_capture)
+    rotate_sec = int(data.get("rotate_sec") or config.get("LAB_ROTATE_SEC") or 12)
+    result = nids_test_runner.start_nids_soak(
+        current_app._get_current_object(),
+        config,
+        mode=(data.get("mode") or "").strip() or None,
+        interface=(data.get("interface") or "").strip() or None,
+        eve_path=(data.get("eve_path") or "").strip() or None,
+        with_lab=bool(data.get("with_lab", True)),
+        patterns=patterns,
+        auto_capture=auto_capture,
+        poll_sec=float(data.get("poll_sec") or 5),
+        rotate_sec=rotate_sec,
+        stop_live_on_exit=bool(data.get("stop_live_on_exit", True)),
+    )
+    if not result.get("ok"):
+        code = 403 if "disabled" in str(result.get("error", "")).lower() else 400
+        return jsonify(result), code
+    return jsonify(result), 201
+
+
+@api_bp.route("/nids-test/stop", methods=["POST"])
+@limiter.limit("30 per hour")
+def nids_test_stop():
+    from app.services.lab import nids_test_runner
+
+    data = request.get_json() or {}
+    stop_live = data.get("stop_live")
+    if stop_live is not None:
+        stop_live = bool(stop_live)
+    return jsonify(nids_test_runner.stop_nids_soak(stop_lab=True, stop_live=stop_live))
+
+
+@limiter.exempt
+@api_bp.route("/nids-test/status")
+def nids_test_status_route():
+    from app.services.lab import nids_test_runner
+
+    return jsonify(nids_test_runner.nids_soak_status())
 
 
 @api_bp.route("/dashboard/overview")

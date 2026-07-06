@@ -5,14 +5,14 @@ import json
 import logging
 
 from app.extensions import cache, db
-from app.models.analysis import Analysis, Finding, Observable
+from app.models.analysis import Analysis, Finding, Flow, Observable
 from app.services.llm.prompts import (
     EXECUTIVE_SUMMARY_PROMPT,
     FINDING_PROMPT,
     HUNT_HYPOTHESES_PROMPT,
     SYSTEM_ANALYST,
 )
-from app.services.llm.provider import complete_with_retry, get_provider
+from app.services.llm.ensemble import get_llm_ensemble
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +24,7 @@ class LLMAnalyst:
 
     def __init__(self, config: dict):
         self.config = config
-        self.provider = get_provider(config)
+        self.ensemble = get_llm_ensemble(config)
         self.max_calls = int(config.get("LLM_MAX_CALLS_PER_ANALYSIS", 25))
         self.enabled = config.get("LLM_ENABLED", True)
         self._call_count = 0
@@ -47,7 +47,7 @@ class LLMAnalyst:
             pass
 
         self._call_count += 1
-        result = complete_with_retry(self.provider, system, user, temperature)
+        result = self.ensemble.complete_json(system, user, temperature, cache_prefix=prefix)
         if result:
             self._consecutive_failures = 0
             try:
@@ -84,13 +84,19 @@ class LLMAnalyst:
             if progress_cb:
                 progress_cb(idx + 1, len(candidates))
 
-            evidence = json.dumps(finding.evidence or {}, default=str)[:2000]
+            evidence = json.dumps(finding.evidence or {}, default=str)
+            flow_data = {}
+            if finding.flow_id:
+                f = Flow.query.get(finding.flow_id)
+                if f:
+                    flow_data = f.to_dict()
             enrichment = self._get_finding_enrichment(finding)
             user = FINDING_PROMPT.format(
                 title=finding.title,
                 severity=finding.severity,
-                evidence=evidence,
-                enrichment=json.dumps(enrichment, default=str)[:2000],
+                evidence=evidence[:8000],
+                flow_json=json.dumps(flow_data, default=str)[:8000],
+                enrichment=json.dumps(enrichment, default=str)[:8000],
                 mitre_tactic=finding.mitre_tactic or "",
                 mitre_technique=finding.mitre_technique or "",
             )

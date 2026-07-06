@@ -27,15 +27,15 @@ RFC1918 = [
 
 
 def is_private_ip(ip_str: str) -> bool:
-    try:
-        ip = ipaddress.ip_address(ip_str)
-        return ip.is_private or ip.is_loopback or ip.is_link_local
-    except ValueError:
-        return False
+    from app.services.net_utils import is_internal_ip
+
+    return is_internal_ip(ip_str)
 
 
 def is_external_ip(ip_str: str) -> bool:
-    return not is_private_ip(ip_str)
+    from app.services.net_utils import is_external_ip as _ext
+
+    return _ext(ip_str)
 
 
 @dataclass

@@ -37,6 +37,7 @@ def _project_root(config: dict) -> Path:
 
 _last_diagnostics: list[dict] = []
 _eve_monitor_offset: dict[str, int] = {}
+_discovered_eve: dict = {"path": None, "source": None, "checked_at": 0.0}
 
 _RUNTIME_YAML = """%YAML 1.1
 ---
@@ -414,14 +415,71 @@ def _managed_process_alive() -> bool:
     return proc is not None and proc.poll() is None
 
 
-def _resolve_eve_path(config: dict) -> Path:
-    """Prefer the managed Suricata log dir when packetEye started the process."""
+def _parse_eve_from_yaml(config_path: Path) -> Path | None:
+    """Best-effort EVE path from suricata.yaml without PyYAML."""
+    import re
+
+    if not config_path.is_file():
+        return None
+    try:
+        text = config_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    log_dir = "."
+    m = re.search(r"default-log-dir:\s*(\S+)", text)
+    if m:
+        log_dir = m.group(1).strip("\"'")
+    eve_name = "eve.json"
+    for block in re.finditer(r"eve-log:[\s\S]*?(?=\n\s*\w|\Z)", text):
+        fm = re.search(r"filename:\s*(\S+)", block.group(0))
+        if fm:
+            eve_name = fm.group(1).strip("\"'")
+            break
+    base = config_path.parent
+    log_path = Path(log_dir)
+    if log_path.is_absolute():
+        return log_path / eve_name
+    if log_dir == ".":
+        return base / eve_name
+    return base / log_dir / eve_name
+
+
+def discover_eve_path(config: dict) -> tuple[Path, str]:
+    """Resolve EVE file path and how it was discovered."""
     if _managed_process_alive():
         log_dir = Path(str(config.get("SURICATA_LOG_DIR") or ""))
         if log_dir.is_dir():
-            return log_dir / "eve.json"
+            return log_dir / "eve.json", "managed"
+
     configured = str(config.get("SURICATA_EVE_PATH") or "").strip()
-    return Path(configured) if configured else Path()
+    if configured:
+        p = Path(configured)
+        if p.is_file():
+            return p, "config"
+
+    log_dir = Path(str(config.get("SURICATA_LOG_DIR") or ""))
+    if log_dir.is_dir():
+        candidate = log_dir / "eve.json"
+        if candidate.is_file():
+            return candidate, "log_dir"
+
+    cfg_path, _ = _resolve_config_path(config)
+    if cfg_path:
+        from_yaml = _parse_eve_from_yaml(Path(cfg_path))
+        if from_yaml and from_yaml.is_file():
+            return from_yaml, "yaml"
+
+    if configured:
+        return Path(configured), "config"
+    if log_dir.is_dir():
+        return log_dir / "eve.json", "log_dir"
+    return Path(), "unknown"
+
+
+def _resolve_eve_path(config: dict) -> Path:
+    path, source = discover_eve_path(config)
+    _discovered_eve.update({"path": str(path) if str(path) else None, "source": source, "checked_at": time.time()})
+    return path
 
 
 def _eve_stats(config: dict) -> dict:
@@ -432,6 +490,8 @@ def _eve_stats(config: dict) -> dict:
         "size_bytes": 0,
         "age_seconds": None,
         "events_per_second": None,
+        "source": _discovered_eve.get("source") or "unknown",
+        "discovered": bool(_discovered_eve.get("path")),
     }
     if not stats["exists"]:
         return stats

@@ -70,12 +70,11 @@ def _resolve_cic_column(df: pd.DataFrame, aliases: list[str]) -> str | None:
     return None
 
 
+from app.services.net_utils import is_external_ip, is_internal_ip
+
+
 def _is_private_ip(ip_str: str) -> bool:
-    try:
-        ip = ipaddress.ip_address(str(ip_str))
-        return ip.is_private or ip.is_loopback or ip.is_link_local
-    except ValueError:
-        return False
+    return is_internal_ip(ip_str)
 
 
 def _port_entropy(flows_df: pd.DataFrame) -> dict:
@@ -159,7 +158,7 @@ def _flow_row_features(f: dict, port_entropy: dict) -> dict:
     dst_ip = f.get("dst_ip", "")
     is_external = f.get("is_external_dst")
     if is_external is None:
-        is_external = not _is_private_ip(dst_ip)
+        is_external = is_external_ip(dst_ip)
 
     bytes_total = bytes_sent + bytes_recv
     packets_total = packets_sent + packets_recv
@@ -301,7 +300,7 @@ def build_feature_matrix_from_cic(df: pd.DataFrame) -> pd.DataFrame:
 
     if dst_col:
         result["is_external_dst"] = (
-            df[dst_col].astype(str).apply(lambda ip: 0 if _is_private_ip(ip) else 1).to_numpy()
+            df[dst_col].astype(str).apply(lambda ip: 1 if is_external_ip(ip) else 0).to_numpy()
         )
 
     return result

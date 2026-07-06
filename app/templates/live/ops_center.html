@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}Live Operations{% endblock %}
+{% block head %}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+.live-ops-shell { min-height: calc(100vh - 120px); display: flex; flex-direction: column; }
+.live-ops-tab-content .tab-pane { padding-top: 0.75rem; }
+.capture-live-wrap, .suricata-table-wrap { max-height: 420px; overflow: auto; }
+</style>
+{% endblock %}
+{% block content %}
+<div class="live-ops-shell">
+    <div class="dashboard-hero mb-3">
+        <div class="d-flex flex-wrap justify-content-between align-items-start gap-3">
+            <div>
+                <h2 class="mb-1"><i class="bi bi-shield-lock text-info"></i> SOC Operations Center</h2>
+                <p class="text-muted mb-0 small">Live alert queue, network events, and analyst insights — click any item for details.</p>
+            </div>
+            <div class="d-flex flex-wrap align-items-center gap-2">
+                {% if live.ml_loaded %}<span class="badge bg-success"><i class="bi bi-cpu"></i> ML loaded</span>{% endif %}
+                {% if live.enabled %}<span class="badge bg-info">Live enabled</span>{% else %}<span class="badge bg-danger">Disabled</span>{% endif %}
+                <span class="badge bg-secondary" id="mlCaptureBadge">capture: checking…</span>
+                <span class="live-pulse" id="livePulse"></span>
+                <span id="liveStatus" class="badge bg-secondary">idle</span>
+            </div>
+        </div>
+    </div>
+
+    {% if not live.enabled %}
+    <div class="alert alert-danger mb-3">Set <code>LIVE_MONITOR_ENABLED=true</code> in <code>.env</code> and restart.</div>
+    {% endif %}
+
+    {% include "partials/live_nav.html" %}
+    {% include "partials/live_ops_feedback.html" %}
+
+    <div class="tab-content live-ops-tab-content" id="liveOpsTabContent">
+        <div class="tab-pane fade {% if live_page == 'overview' %}show active{% endif %}" id="tab-overview" role="tabpanel">
+            {% include "partials/live_tab_overview.html" %}
+        </div>
+        <div class="tab-pane fade {% if live_page == 'capture' %}show active{% endif %}" id="tab-capture" role="tabpanel">
+            {% include "partials/live_tab_capture.html" %}
+        </div>
+        <div class="tab-pane fade {% if live_page == 'suricata' %}show active{% endif %}" id="tab-suricata" role="tabpanel">
+            {% include "partials/live_tab_suricata.html" %}
+        </div>
+        <div class="tab-pane fade {% if live_page == 'ml' %}show active{% endif %}" id="tab-ml" role="tabpanel">
+            {% include "partials/live_tab_ml.html" %}
+        </div>
+        <div class="tab-pane fade {% if live_page == 'lab' %}show active{% endif %}" id="tab-lab" role="tabpanel">
+            {% include "partials/live_tab_lab.html" %}
+        </div>
+    </div>
+
+    {% include "partials/live_ops_inline_panels.html" %}
+</div>
+
+<script id="live-monitor-data" type="application/json">{{ live | tojson }}</script>
+<script>window.livePage = {{ live_page|tojson }};</script>
+{% endblock %}
+{% block scripts %}
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="{{ url_for('static', filename='js/threat_map.js') }}"></script>
+<script src="{{ url_for('static', filename='js/osint_detail.js') }}"></script>
+<script src="{{ url_for('static', filename='js/live_common.js') }}"></script>
+<script src="{{ url_for('static', filename='js/live_soc.js') }}"></script>
+<script src="{{ url_for('static', filename='js/live_capture.js') }}"></script>
+<script src="{{ url_for('static', filename='js/live_suricata.js') }}"></script>
+{% endblock %}

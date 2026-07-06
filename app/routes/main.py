@@ -20,8 +20,8 @@ LIVE_ENDPOINTS = (
     "main.live_capture",
     "main.live_suricata",
     "main.live_ml",
+    "main.live_lab",
     "main.live_alerts",
-    "main.live_monitor",
 )
 
 
@@ -35,33 +35,34 @@ def index():
 
 
 @main_bp.route("/live")
-def live_monitor():
-    return redirect(url_for("main.live_overview"))
-
-
 @main_bp.route("/live/overview")
 def live_overview():
-    return render_template("live/overview.html", live=_live_context(), live_page="overview")
+    return render_template("live/ops_center.html", live=_live_context(), live_page="overview")
 
 
 @main_bp.route("/live/capture")
 def live_capture():
-    return render_template("live/capture.html", live=_live_context(), live_page="capture")
+    return render_template("live/ops_center.html", live=_live_context(), live_page="capture")
 
 
 @main_bp.route("/live/suricata")
 def live_suricata():
-    return render_template("live/suricata.html", live=_live_context(), live_page="suricata")
+    return render_template("live/ops_center.html", live=_live_context(), live_page="suricata")
 
 
 @main_bp.route("/live/ml")
 def live_ml():
-    return render_template("live/ml.html", live=_live_context(), live_page="ml")
+    return render_template("live/ops_center.html", live=_live_context(), live_page="ml")
+
+
+@main_bp.route("/live/lab")
+def live_lab():
+    return render_template("live/ops_center.html", live=_live_context(), live_page="lab")
 
 
 @main_bp.route("/live/alerts")
 def live_alerts():
-    return redirect(url_for("main.live_ml", _anchor="alertFeedSection"))
+    return redirect(url_for("main.live_ml"))
 
 
 @main_bp.route("/dashboard")

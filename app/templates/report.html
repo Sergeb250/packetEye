@@ -25,18 +25,21 @@
         <div class="col-md-3">
             <div class="card text-center p-3">
                 <canvas id="riskGauge" height="180"></canvas>
-                <h3 class="mt-2">{{ '%.1f'|format(report.risk_score or analysis.risk_score or 0) }}/10</h3>
+                <h3 class="mt-2"><span id="liveRiskScore">{{ '%.1f'|format(report.risk_score or analysis.risk_score or 0) }}</span>/10</h3>
+                <small class="text-muted">Detection risk</small>
             </div>
         </div>
         <div class="col-md-9">
             <div class="card p-3">
                 <p>{{ report.executive_summary or (analysis.summary_json or {}).get('executive_summary', 'No summary available.') }}</p>
-                <div class="row g-2 mt-2">
-                    <div class="col"><span class="badge bg-secondary">{{ (report.metrics or {}).get('total_flows', analysis.total_flows) }} flows</span></div>
-                    <div class="col"><span class="badge bg-secondary">{{ (report.metrics or {}).get('unique_external_ips', 0) }} external IPs</span></div>
-                    <div class="col"><span class="badge bg-danger">{{ (report.metrics or {}).get('malicious_observables', 0) }} malicious IOCs</span></div>
-                    <div class="col"><span class="badge bg-warning text-dark">{{ findings|length }} findings</span></div>
+                <div class="row g-2 mt-2" id="reportMetricsBadges">
+                    <div class="col"><span class="badge bg-secondary" id="metricFlows">{{ (report.metrics or {}).get('total_flows', analysis.total_flows) }} flows</span></div>
+                    <div class="col"><span class="badge bg-secondary" id="metricExternalIps">{{ (report.metrics or {}).get('unique_external_ips', 0) }} external IPs</span></div>
+                    <div class="col"><span class="badge bg-danger" id="metricMaliciousIocs" title="Confirmed via OSINT investigation">{{ (report.metrics or {}).get('malicious_observables', 0) }} confirmed IOCs</span></div>
+                    <div class="col"><span class="badge bg-info text-dark" id="metricInvestigated" title="Observables with completed OSINT">{{ (report.metrics or {}).get('investigated_count', 0) }} investigated</span></div>
+                    <div class="col"><span class="badge bg-warning text-dark" id="metricFindings">{{ findings|length }} findings</span></div>
                 </div>
+                <p class="small text-muted mt-2 mb-0">Detection risk reflects findings severity. Confirmed IOCs require OSINT investigation.</p>
             </div>
         </div>
     </div>
@@ -91,6 +94,56 @@
     <h4 class="section-title"><i class="bi bi-diagram-3"></i> Flows</h4>
     {% include "partials/flow_table.html" %}
 </section>
+<script>
+document.querySelectorAll('.btn-flow-investigate').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+        const fid = btn.dataset.flowId;
+        btn.disabled = true;
+        await fetch(`/api/investigate/flow/${fid}`, { method: 'POST' });
+        const poll = setInterval(async () => {
+            const res = await fetch(`/api/investigate/flow/${fid}`);
+            if (!res.ok) return;
+            const data = await res.json();
+            const inv = data.investigation;
+            if (inv?.status === 'complete' && inv.targets) {
+                clearInterval(poll);
+                btn.disabled = false;
+                const keys = Object.keys(inv.targets);
+                if (keys.length && window.openOsintFromInvestigation) {
+                    window.openOsintFromInvestigation(inv, keys[0]);
+                }
+                if (typeof window.refreshReportMetrics === 'function') window.refreshReportMetrics();
+            }
+            if (inv?.status === 'failed' || inv?.status === 'complete') { clearInterval(poll); btn.disabled = false; }
+        }, 1500);
+    });
+});
+document.querySelectorAll('.btn-flow-map').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+        const ip = btn.dataset.dst;
+        if (typeof window.loadThreatMap === 'function') {
+            bootstrap.Modal.getOrCreateInstance(document.getElementById('threatMapModal')).show();
+            document.getElementById('threatMapModalCanvas').innerHTML = '';
+            await window.loadThreatMap('threatMapModalCanvas', `/api/analysis/${analysisId}/geo`, 'No geo yet');
+        }
+    });
+});
+document.querySelectorAll('.btn-flow-ai').forEach((btn) => {
+    btn.addEventListener('click', () => {
+        const dst = btn.dataset.dst;
+        const flowId = btn.dataset.flowId;
+        if (window.openChatWithContext) {
+            window.openChatWithContext(
+                `Analyze this flow to ${dst}. Use markdown tables for flow stats and mermaid for the communication path.`,
+                analysisId,
+                null,
+                { type: 'report_flow', flow_id: flowId, dst_ip: dst },
+                flowId,
+            );
+        }
+    });
+});
+</script>
 
 <!-- Observable Intelligence -->
 <section class="mb-5">
@@ -104,14 +157,20 @@
         {% for tab_id, obs_type in [('tabIPs','ip'),('tabDomains','domain'),('tabJA3','ja3')] %}
         <div class="tab-pane fade {% if loop.first %}show active{% endif %}" id="{{ tab_id }}">
             <table class="table table-sm">
-                <thead><tr><th>Value</th><th>Count</th><th>Status</th><th>Confidence</th></tr></thead>
+                <thead><tr><th>Value</th><th>Count</th><th>TI Verdict</th><th>Confidence</th><th></th></tr></thead>
                 <tbody>
                 {% for o in observables if o.type == obs_type %}
                 <tr>
                     <td><code>{{ o.value|e }}</code></td>
                     <td>{{ o.occurrence_count }}</td>
-                    <td>{% if o.is_malicious %}<span class="badge bg-danger">Malicious</span>{% else %}<span class="badge bg-success">Clean</span>{% endif %}</td>
+                    <td>{% if o.is_malicious %}<span class="badge bg-danger" title="TI composite verdict">TI: Malicious</span>{% else %}<span class="badge bg-success">TI: Clean</span>{% endif %}</td>
                     <td>{{ '%.0f'|format((o.confidence or 0) * 100) }}%</td>
+                    <td>
+                        {% if o.type in ('ip', 'domain') %}
+                        <button type="button" class="btn btn-outline-info btn-sm py-0 btn-osint-detail"
+                                data-target="{{ o.value|e }}" data-analysis-id="{{ analysis.id }}">Detail</button>
+                        {% endif %}
+                    </td>
                 </tr>
                 {% endfor %}
                 </tbody>
@@ -161,5 +220,8 @@ const analysisId = '{{ analysis.id }}';
 <script src="{{ url_for('static', filename='js/threat_map.js') }}"></script>
 <script src="{{ url_for('static', filename='js/charts.js') }}"></script>
 <script src="{{ url_for('static', filename='js/report.js') }}"></script>
+{% include "partials/osint_detail_modal.html" %}
+{% include "partials/threat_map_modal.html" %}
+<script src="{{ url_for('static', filename='js/osint_detail.js') }}"></script>
 <script src="{{ url_for('static', filename='js/investigate.js') }}"></script>
 {% endblock %}

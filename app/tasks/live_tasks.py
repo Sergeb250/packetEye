@@ -24,18 +24,30 @@ def stop_live_monitor_task(session_id: str):
     stop_monitor(session_id)
 
 
-def create_live_session(config: dict, eve_path: str | None = None, interface: str | None = None) -> Analysis:
+def create_live_session(
+    config: dict,
+    eve_path: str | None = None,
+    interface: str | None = None,
+    capture_source: str = "suricata",
+) -> Analysis:
     session_id = str(uuid.uuid4())
     eve = eve_path or config.get("SURICATA_EVE_PATH", "")
+    label = interface or ("scapy" if capture_source == "scapy" else "suricata")
     analysis = Analysis(
         id=session_id,
-        filename=f"live-{interface or 'suricata'}",
-        file_path=str(eve),
+        filename=f"live-{label}",
+        file_path=str(eve) if capture_source != "scapy" else f"scapy://{interface or 'eth0'}",
         analysis_name=f"Live NIDS {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')}",
         source="live",
         status="analyzing",
         progress_pct=10,
-        summary_json={"interface": interface, "eve_path": eve, "live": True},
+        summary_json={
+            "interface": interface,
+            "eve_path": eve,
+            "live": True,
+            "capture_source": capture_source,
+            "capture_mode": capture_source if capture_source == "scapy" else "suricata",
+        },
     )
     db.session.add(analysis)
     db.session.commit()

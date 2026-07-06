@@ -255,6 +255,8 @@ def build_live_monitor_context(config: dict) -> dict[str, Any]:
         "enrichment_mode": str(config.get("ENRICHMENT_MODE") or "on_investigate"),
         "webhook_enabled": bool(config.get("ALERT_WEBHOOK_URL")),
         "chatbot_enabled": bool(config.get("CHATBOT_ENABLED", True)),
+        "auto_sync_eve": bool(config.get("AUTO_SYNC_EVE", True)),
+        "alert_enhanced_analysis": bool(config.get("ALERT_ENHANCED_ANALYSIS")),
         "active_session": active,
         "latest_session_id": latest_live.id if latest_live else None,
     }

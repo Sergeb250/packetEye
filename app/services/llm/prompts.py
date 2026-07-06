@@ -8,12 +8,15 @@ FINDING_PROMPT = """You are reviewing a finding from an automated network analys
 
 Finding: {title}
 Severity: {severity}
-Evidence: {evidence}
-Enrichment data: {enrichment}
+Evidence JSON: {evidence}
+Related flow JSON: {flow_json}
+OSINT / enrichment JSON: {enrichment}
 MITRE mapping: {mitre_tactic} / {mitre_technique}
 
+Use all JSON fields (IPs, ports, anomaly scores, DNS, TLS SNI, JA3, timing stats) in your analysis.
+
 Provide JSON:
-{{"explanation": "2-3 sentences", "recommendation": "specific action", "confidence": "high|medium|low", "confidence_reason": "one sentence"}}"""
+{{"explanation": "2-4 sentences referencing specific data points", "recommendation": "specific SOC action", "confidence": "high|medium|low", "confidence_reason": "one sentence"}}"""
 
 EXECUTIVE_SUMMARY_PROMPT = """Summarize this network analysis for a non-technical stakeholder in 3-5 paragraphs.
 

@@ -60,6 +60,11 @@ class SuricataConsumer:
             self._offset = 0
         self._inode = inode
 
+    def rebind(self, eve_path: str | Path) -> None:
+        self.eve_path = Path(eve_path)
+        self._offset = 0
+        self._inode = None
+
     def poll(self, max_lines: int = 500) -> list[dict]:
         """Backwards-compatible flow-only poll."""
         return self.poll_events(max_lines)["flows"]

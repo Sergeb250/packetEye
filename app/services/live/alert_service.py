@@ -8,6 +8,7 @@ from collections import deque
 from app.extensions import cache, db
 from app.models.analysis import Finding
 from app.services.detection.scoring import severity_to_score
+from app.services.net_utils import is_external_ip, ml_alert_suppressed
 
 logger = logging.getLogger(__name__)
 
@@ -19,11 +20,13 @@ class AlertService:
         rate_limit_per_minute: int = 60,
         threshold: float = 5.0,
         webhook=None,
+        whitelist=None,
     ):
         self.session_id = session_id
         self.rate_limit = rate_limit_per_minute
         self.threshold = threshold
         self.webhook = webhook
+        self.whitelist = whitelist
         self._timestamps: deque = deque()
 
     def _allowed(self) -> bool:
@@ -47,12 +50,17 @@ class AlertService:
     def emit(self, flow_dict: dict, ml_result: dict) -> dict | None:
         if not ml_result.get("flagged"):
             return None
+        suppressed, reason = ml_alert_suppressed(flow_dict, self.whitelist)
+        if suppressed:
+            logger.debug("ML alert suppressed for %s → %s: %s", flow_dict.get("src_ip"), flow_dict.get("dst_ip"), reason)
+            return None
         if not self._allowed():
             logger.debug("Alert rate limit reached for session %s", self.session_id)
             return None
 
         score = ml_result.get("anomaly_score", 0)
         severity = self._severity_for_score(score)
+        external = is_external_ip(flow_dict.get("dst_ip") or "")
 
         alert = {
             "id": str(uuid.uuid4()),
@@ -67,6 +75,11 @@ class AlertService:
             "src_port": flow_dict.get("src_port"),
             "dst_port": flow_dict.get("dst_port"),
             "protocol": flow_dict.get("protocol"),
+            "total_fwd_packets": flow_dict.get("total_fwd_packets"),
+            "total_bwd_packets": flow_dict.get("total_bwd_packets"),
+            "total_fwd_bytes": flow_dict.get("total_fwd_bytes"),
+            "total_bwd_bytes": flow_dict.get("total_bwd_bytes"),
+            "flow_duration": flow_dict.get("flow_duration"),
         }
 
         finding = Finding(
@@ -74,7 +87,11 @@ class AlertService:
             flow_id=flow_dict.get("id"),
             rule_id="ML-ANOMALY-001",
             source="ml",
-            title="Live ML Anomaly — suspicious flow detected",
+            title=(
+                "Live ML Anomaly — outlier flow to external host"
+                if external
+                else "Live ML Anomaly — unusual traffic pattern"
+            ),
             description=ml_result.get("explanation", ""),
             severity=severity,
             severity_score=score,
@@ -84,9 +101,13 @@ class AlertService:
                 "live": True,
                 **{k: flow_dict.get(k) for k in ("src_ip", "dst_ip", "src_port", "dst_port", "protocol")},
             },
-            mitre_tactic="TA0011 - Command and Control",
-            mitre_technique="T1071 - Application Layer Protocol",
-            recommendation="Investigate source host and block destination if confirmed malicious.",
+            mitre_tactic="TA0011 - Command and Control" if external else None,
+            mitre_technique="T1071 - Application Layer Protocol" if external else None,
+            recommendation=(
+                "Investigate source host and block external destination if confirmed malicious."
+                if external
+                else "Review local traffic pattern; unlikely to be Internet C2."
+            ),
         )
         db.session.add(finding)
         db.session.commit()
@@ -95,10 +116,32 @@ class AlertService:
         self._push_to_feed(alert)
         if self.webhook:
             self.webhook.notify(alert)
+        self._maybe_enhance(alert, finding.id)
         return alert
+
+    def _maybe_enhance(self, alert: dict, finding_id: str) -> None:
+        try:
+            from flask import current_app
+            cfg = dict(current_app.config)
+            if cfg.get("ALERT_ENHANCED_ANALYSIS") or cfg.get("LLM_LIVE_ALERT_SYNTHESIS"):
+                from app.services.live.alert_enricher import kickoff_enhanced_alert
+                kickoff_enhanced_alert(current_app._get_current_object(), finding_id, alert)
+        except Exception as exc:
+            logger.debug("Enhanced alert skip: %s", exc)
 
     def emit_suricata(self, alert_dict: dict) -> dict | None:
         """Surface a Suricata signature hit as a live finding + feed alert."""
+        flow_check = {
+            "src_ip": alert_dict.get("src_ip"),
+            "dst_ip": alert_dict.get("dst_ip"),
+            "src_port": alert_dict.get("src_port"),
+            "dst_port": alert_dict.get("dst_port"),
+            "protocol": alert_dict.get("protocol"),
+        }
+        suppressed, reason = ml_alert_suppressed(flow_check, self.whitelist)
+        if suppressed:
+            logger.debug("Suricata alert suppressed: %s", reason)
+            return None
         if not self._allowed():
             logger.debug("Alert rate limit reached for session %s", self.session_id)
             return None
@@ -150,6 +193,7 @@ class AlertService:
         self._push_to_feed(alert)
         if self.webhook:
             self.webhook.notify(alert)
+        self._maybe_enhance(alert, finding.id)
         return alert
 
     def emit_correlation(self, match: dict) -> dict | None:

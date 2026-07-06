@@ -1,12 +1,3 @@
-{% extends "base.html" %}
-{% block title %}Traffic Capture{% endblock %}
-{% block content %}
-<div class="dashboard-hero mb-4">
-    <h2 class="mb-1"><i class="bi bi-ethernet text-info"></i> Traffic Capture</h2>
-    <p class="text-muted mb-0 small">Start Suricata (rules + ML) or tcpdump (PCAP chunks) from the browser.</p>
-</div>
-{% include "partials/live_nav.html" %}
-
 <div class="card">
     <div class="card-header d-flex justify-content-between align-items-center">
         <span>Capture controls</span>
@@ -19,7 +10,7 @@
         <div class="alert alert-info small">
             <strong>Tip:</strong> Avoid <code>lo</code> (loopback). Pick <code>eth0</code>, <code>wlan0</code>, or your active interface.
             On Kali run <code>sudo python run.py</code> for live capture.
-            tcpdump PCAP chunks go to <code>/tmp/packeteye/chunks-*</code> or <code>/var/log/packeteye/chunks</code> (not under <code>$HOME</code> — AppArmor blocks that).
+            tcpdump PCAP chunks go to <code>/tmp/packeteye/chunks-*</code> or <code>/var/log/packeteye/chunks</code>.
         </div>
         <div class="row g-3 align-items-end">
             <div class="col-md-3">
@@ -88,7 +79,6 @@
                     <tr>
                         <td colspan="8" class="empty-state text-center py-4 text-muted">
                             <i class="bi bi-eye"></i> Start capture to see live packets and flows.
-                            Suricata shows EVE events; tcpdump shows raw packets via Scapy.
                         </td>
                     </tr>
                 </tbody>
@@ -96,11 +86,3 @@
         </div>
     </div>
 </div>
-
-<script id="live-monitor-data" type="application/json">{{ live | tojson }}</script>
-{% include "partials/action_modal.html" %}
-{% endblock %}
-{% block scripts %}
-<script src="{{ url_for('static', filename='js/live_common.js') }}"></script>
-<script src="{{ url_for('static', filename='js/live_capture.js') }}"></script>
-{% endblock %}

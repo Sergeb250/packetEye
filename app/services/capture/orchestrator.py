@@ -61,6 +61,22 @@ def _write_state(config: dict, state: dict) -> None:
         logger.warning("Could not persist capture state: %s", exc)
 
 
+def get_ml_session_id(config: dict) -> str | None:
+    sid = _read_state(config).get("ml_session_id")
+    return str(sid) if sid else None
+
+
+def set_ml_session_id(config: dict, session_id: str | None) -> None:
+    state = _read_state(config)
+    if not state:
+        return
+    if session_id:
+        state["ml_session_id"] = session_id
+    else:
+        state.pop("ml_session_id", None)
+    _write_state(config, state)
+
+
 def _clear_state(config: dict) -> None:
     try:
         _state_path(config).unlink(missing_ok=True)
@@ -139,6 +155,22 @@ def _chunk_stats(config: dict) -> dict:
         "latest": latest.name if latest else None,
         "latest_age_seconds": round(time.time() - latest.stat().st_mtime, 1) if latest else None,
     }
+
+
+def list_tcpdump_chunks(config: dict) -> list[dict]:
+    chunk_dir = _chunk_dir(config)
+    if not chunk_dir.is_dir():
+        return []
+    out = []
+    for p in sorted(chunk_dir.glob("chunk_*.pcap"), key=lambda x: x.stat().st_mtime, reverse=True):
+        st = p.stat()
+        out.append({
+            "name": p.name,
+            "path": str(p),
+            "size_bytes": st.st_size,
+            "modified": datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).isoformat(),
+        })
+    return out[:50]
 
 
 def start_capture(config: dict, mode: str | None = None, interface: str | None = None) -> dict:

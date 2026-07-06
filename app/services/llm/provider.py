@@ -76,18 +76,18 @@ class NVIDIAProvider(LLMProvider):
                 base_url=self.base_url, api_key=self.api_key,
                 timeout=self.timeout, max_retries=1,
             )
-            # Disable DeepSeek V4 "thinking" mode for reliable JSON output
-            extra_body = {"chat_template_kwargs": {"thinking": False}}
-            response = client.chat.completions.create(
-                model=self.model,
-                messages=[
+            kwargs: dict = {
+                "model": self.model,
+                "messages": [
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
-                temperature=temperature,
-                max_tokens=self.max_tokens,
-                extra_body=extra_body,
-            )
+                "temperature": temperature,
+                "max_tokens": self.max_tokens,
+            }
+            if "deepseek" in self.model.lower():
+                kwargs["extra_body"] = {"chat_template_kwargs": {"thinking": False}}
+            response = client.chat.completions.create(**kwargs)
             return response.choices[0].message.content or "{}"
         except Exception as exc:
             logger.error("NVIDIA NIM call failed: %s", exc)
@@ -117,6 +117,52 @@ class AnthropicProvider(LLMProvider):
             return response.content[0].text if response.content else "{}"
         except Exception as exc:
             logger.error("Anthropic call failed: %s", exc)
+            return "{}"
+
+
+class OpenRouterProvider(LLMProvider):
+    """OpenRouter — fallback when NVIDIA models fail."""
+
+    DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
+
+    def __init__(
+        self,
+        api_key: str,
+        model: str = "deepseek/deepseek-chat",
+        base_url: str | None = None,
+        max_tokens: int = 2048,
+        timeout: float = DEFAULT_TIMEOUT_SECONDS,
+    ):
+        self.api_key = api_key
+        self.model = model
+        self.base_url = base_url or self.DEFAULT_BASE_URL
+        self.max_tokens = max_tokens
+        self.timeout = timeout
+
+    def complete(self, system_prompt: str, user_prompt: str, temperature: float = 0.2) -> str:
+        if not self.api_key:
+            return "{}"
+        try:
+            from openai import OpenAI
+
+            client = OpenAI(
+                base_url=self.base_url,
+                api_key=self.api_key,
+                timeout=self.timeout,
+                max_retries=1,
+            )
+            response = client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=temperature,
+                max_tokens=self.max_tokens,
+            )
+            return response.choices[0].message.content or "{}"
+        except Exception as exc:
+            logger.error("OpenRouter call failed: %s", exc)
             return "{}"
 
 

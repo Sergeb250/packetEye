@@ -3,6 +3,8 @@ cidr_ranges:
   - 104.16.0.0/13
   - 8.8.8.0/24
   - 208.67.222.0/24
+  - 239.255.255.250/32   # SSDP multicast
+  - 224.0.0.251/32       # mDNS
 
 domains:
   - windowsupdate.microsoft.com
@@ -14,3 +16,5 @@ ports_protocols:
   - { port: 53, protocol: UDP, note: "Standard DNS" }
   - { port: 443, protocol: TCP, note: "Standard HTTPS" }
   - { port: 80, protocol: TCP, note: "Standard HTTP" }
+  - { port: 1900, protocol: UDP, note: "SSDP / UPnP discovery" }
+  - { port: 5353, protocol: UDP, note: "mDNS" }

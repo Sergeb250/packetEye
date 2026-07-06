@@ -1,742 +1,79 @@
 # packetEye
 
-**AI-Powered Network Forensics & Threat Hunting Platform**
+**AI-powered network forensics, live NIDS, and SOC operations platform**
 
-packetEye ingests PCAP/CAP network captures, reconstructs every flow, enriches observables with threat intelligence, runs 17 detection rules plus ML anomaly scoring, and uses **NVIDIA NIM (DeepSeek V4)** to produce plain-English analyst narratives, executive summaries, and hunt hypotheses.
-
----
-
-## Table of Contents
-
-1. [What packetEye Does](#1-what-packeye-does)
-2. [System Architecture](#2-system-architecture)
-3. [Technology Stack](#3-technology-stack)
-4. [Directory Structure](#4-directory-structure)
-5. [Application Bootstrap](#5-application-bootstrap)
-6. [Database Models](#6-database-models)
-7. [Analysis Pipeline (Celery Tasks)](#7-analysis-pipeline-celery-tasks)
-8. [PCAP Parser](#8-pcap-parser)
-9. [Enrichment Layer](#9-enrichment-layer)
-10. [Detection Engine](#10-detection-engine)
-11. [ML Anomaly Engine](#11-ml-anomaly-engine)
-12. [LLM Layer (NVIDIA NIM / DeepSeek V4)](#12-llm-layer-nvidia-nim--deepseek-v4)
-13. [Report Builder](#13-report-builder)
-14. [Web UI & REST API](#14-web-ui--rest-api)
-15. [Whitelist Engine](#15-whitelist-engine)
-16. [Configuration Reference](#16-configuration-reference)
-17. [Quick Start](#17-quick-start)
-18. [Security Notes](#18-security-notes)
-
----
-
-## 1. What packetEye Does
-
-When an analyst uploads a PCAP file:
-
-1. **Parse** — Reconstruct 5-tuple flows (src IP, dst IP, ports, protocol) and extract DNS queries, HTTP hosts, TLS SNI, JA3 hashes, ARP events.
-2. **Enrich** — Fan out to VirusTotal, AbuseIPDB, WHOIS, and ip-api for every unique IP/domain (cached in Redis).
-3. **Detect** — Evaluate 17 YAML-defined rules (port scans, beaconing, DNS tunneling, etc.) and score flows with Isolation Forest ML.
-4. **Analyze (LLM)** — Call **DeepSeek V4 Pro** via NVIDIA's free NIM API to explain findings, write an executive summary, and propose hunt hypotheses.
-5. **Report** — Assemble metrics, charts, geo map data, and export formats (HTML, JSON, STIX2, CSV).
-
-The frontend polls `/api/analysis/<id>/status` every 3 seconds and shows a live progress bar.
-
----
+packetEye combines **offline PCAP analysis** with **real-time network intrusion detection**. Upload captures for deep forensics, or run live on Suricata/tcpdump with Isolation Forest ML scoring, multi-provider OSINT, ensemble LLM analysis, and a unified SOC operations center.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/Sergeb250/packetEye/59cff38eb29fe1b9e0b5e334ed4e2a3d0c4e5301/packeteye%20demo.gif" alt="PacketEye Demo" width="100%">
 </p>
 
-## 2. System Architecture
+---
 
-```mermaid
-flowchart TB
-    subgraph Client
-        Browser[Bootstrap 5 UI]
-    end
+## Table of Contents
 
-    subgraph Flask["Flask Application"]
-        MainRoutes[main.py — pages]
-        APIRoutes[api.py — REST]
-        Models[(SQLAlchemy Models)]
-    end
-
-    subgraph Workers["Celery Workers"]
-        T1[parse_pcap]
-        T2[enrich_observables]
-        T3[run_detections]
-        T4[run_llm_analysis]
-        T5[build_report]
-    end
-
-    subgraph Services
-        Parser[pcap_parser.py]
-        Enrich[enrichment/orchestrator.py]
-        Detect[detection/engine.py]
-        ML[detection/ml_engine.py]
-        LLM[llm/analyst.py]
-        Report[report_builder.py]
-    end
-
-    subgraph External
-        Redis[(Redis)]
-        SQLite[(SQLite / PostgreSQL)]
-        NVIDIA[NVIDIA NIM API\nDeepSeek V4]
-        VT[VirusTotal]
-        AIPDB[AbuseIPDB]
-        Geo[ip-api]
-    end
-
-    Browser -->|POST /api/upload| APIRoutes
-    Browser -->|poll status| APIRoutes
-    APIRoutes --> Models
-    APIRoutes -->|enqueue| T1
-    T1 --> Parser --> Models
-    T1 --> T2
-    T2 --> Enrich --> VT & AIPDB & Geo
-    Enrich --> Redis
-    T2 --> T3
-    T3 --> Detect & ML --> Models
-    T3 --> T4
-    T4 --> LLM --> NVIDIA
-    T4 --> T5
-    T5 --> Report --> Models
-    Models --> SQLite
-```
-
-### Design principles
-
-| Principle | Implementation |
-|-----------|----------------|
-| **Async pipeline** | Long-running work never blocks the Flask request thread; Celery tasks chain sequentially. |
-| **Progress visibility** | Each task updates `Analysis.status` and `Analysis.progress_pct` in the database. |
-| **Pluggable LLM** | `LLMProvider` abstraction supports NVIDIA (default), OpenAI, Anthropic. |
-| **Optional enrichment** | Missing API keys skip that provider; the pipeline still completes. |
-| **Rule-driven detection** | New detections = new YAML file in `detection_rules/` — no code change required for parameters. |
+1. [Overview](#1-overview)
+2. [Features at a Glance](#2-features-at-a-glance)
+3. [Quick Start](#3-quick-start)
+4. [Feature Guide](#4-feature-guide)
+   - [PCAP Forensics Pipeline](#41-pcap-forensics-pipeline)
+   - [Live NIDS & SOC Ops Center](#42-live-nids--soc-ops-center)
+   - [ML Anomaly Detection](#43-ml-anomaly-detection)
+   - [Rule-Based Detection](#44-rule-based-detection)
+   - [OSINT Enrichment](#45-osint-enrichment)
+   - [LLM Intelligence (Ensemble)](#46-llm-intelligence-ensemble)
+   - [Lab Traffic & Malicious Soak Validation](#47-lab-traffic--malicious-soak-validation)
+   - [Suricata Integration](#48-suricata-integration)
+   - [Unified Capture (tcpdump / Suricata)](#49-unified-capture-tcpdump--suricata)
+   - [SOC Chatbot](#410-soc-chatbot)
+   - [Reports & Export](#411-reports--export)
+   - [Alert Webhooks](#412-alert-webhooks)
+   - [Whitelist & False-Positive Control](#413-whitelist--false-positive-control)
+5. [Architecture](#5-architecture)
+6. [REST API Reference](#6-rest-api-reference)
+7. [Configuration](#7-configuration)
+8. [Project Structure](#8-project-structure)
+9. [Training & Scripts](#9-training--scripts)
+10. [Security](#10-security)
+11. [Documentation](#11-documentation)
 
 ---
 
-## 3. Technology Stack
+## 1. Overview
 
-| Layer | Technology | Role |
-|-------|------------|------|
-| Backend | Python 3.11+, Flask | App factory, routes, templates |
-| Task queue | Celery + Redis | 5-stage analysis pipeline |
-| PCAP parsing | `dpkt` | Fast binary packet dissection |
-| Database | SQLite (dev) / PostgreSQL (prod) | Analyses, flows, findings |
-| Frontend | Bootstrap 5, Chart.js, Leaflet | Upload, dashboard, report |
-| **LLM (default)** | **NVIDIA NIM + DeepSeek V4 Pro** | Free API at `integrate.api.nvidia.com` |
-| ML | scikit-learn Isolation Forest | Unsupervised flow anomaly scoring |
-| Enrichment | aiohttp + asyncio | Concurrent API fan-out |
+packetEye operates in two complementary modes:
+
+| Mode | Input | Output |
+|------|--------|--------|
+| **Forensics** | Uploaded PCAP/CAP files | Flows, findings, OSINT, LLM narratives, HTML/STIX2/CSV reports |
+| **Live NIDS** | Suricata EVE JSON or tcpdump + Scapy feed | Real-time ML alerts, Suricata hits, SOC queue, enhanced LLM synthesis |
+
+Both modes share the same **20-feature Isolation Forest model** (trained on CIC-IDS2017 BENIGN traffic), **YAML detection rules**, **OSINT orchestrator**, and **LLM ensemble**.
 
 ---
 
-## 4. Directory Structure
+## 2. Features at a Glance
 
-```
-packetEye/
-├── app/
-│   ├── __init__.py              # create_app() — Flask factory
-│   ├── config.py                # Environment-based configuration classes
-│   ├── extensions.py            # db, cache, celery, limiter singletons
-│   │
-│   ├── models/
-│   │   ├── analysis.py          # Analysis, Flow, Observable, Finding
-│   │   └── user.py              # User (optional Flask-Login auth)
-│   │
-│   ├── routes/
-│   │   ├── main.py              # HTML pages: /, /dashboard, /report/<id>
-│   │   ├── api.py               # REST JSON API under /api/*
-│   │   └── auth.py              # Login/logout (optional)
-│   │
-│   ├── services/
-│   │   ├── pcap_parser.py       # PCAP → flows + observables
-│   │   ├── enrichment/          # Threat intel API clients
-│   │   ├── detection/           # Rules + ML + scoring
-│   │   ├── llm/                 # NVIDIA/OpenAI/Anthropic providers
-│   │   └── report_builder.py    # Final report JSON assembly
-│   │
-│   ├── tasks/
-│   │   └── analysis_tasks.py    # Celery task chain definitions
-│   │
-│   ├── templates/               # Jinja2 HTML (Bootstrap 5)
-│   └── static/                  # CSS, JavaScript
-│
-├── detection_rules/             # YAML rule definitions (17 rules)
-├── whitelist/                   # Known-good CIDRs/domains
-├── tests/                       # pytest unit tests
-├── .env                         # Local secrets (gitignored)
-├── .env.example                 # Template for configuration
-├── run.py                       # `python run.py` → Flask dev server
-└── celery_worker.py             # Celery worker entry point
-```
+| Feature | Description |
+|---------|-------------|
+| PCAP parsing | 5-tuple flows, DNS/HTTP/TLS/JA3/ARP extraction via `dpkt` |
+| 17+ detection rules | Port scan, beaconing, DNS tunnel, ARP spoof, exfil, DGA, etc. |
+| ML anomalies | Isolation Forest on 20 flow features, 0–10 calibrated score |
+| Live ML + Suricata | Tail EVE or tcpdump; correlate signature + ML hits |
+| 12+ OSINT providers | VT, AbuseIPDB, OTX, GreyNoise, AnyRun, Shodan, URLScan, … |
+| LLM ensemble | NVIDIA DeepSeek + GLM secondary + OpenRouter fallback |
+| Live alert synthesis | CIC attack labels, OSINT, FP suppression on emit |
+| SOC Ops Center | `/live` — capture, ML, Suricata, lab, soak test, inspector |
+| Malicious soak test | Rotate all 13 CIC-style attack patterns; coverage report |
+| SOC chatbot | Markdown + mermaid context from flows, alerts, OSINT |
+| Export | HTML, JSON, STIX2, CSV, PCAP chunks, Suricata EVE |
+| Webhooks | Discord-compatible alert notifications |
 
 ---
 
-## 5. Application Bootstrap
+## 3. Quick Start
 
-### `app/__init__.py` — `create_app()`
-
-This is the **application factory**. It:
-
-1. Loads `.env` via `python-dotenv`
-2. Selects config class (`DevelopmentConfig`, `ProductionConfig`, `TestingConfig`)
-3. Initializes extensions: `db`, `cache`, `login_manager`, `limiter`, `celery`
-4. Registers blueprints: `main_bp`, `api_bp`, `auth_bp`
-5. Creates database tables with `db.create_all()`
-6. Imports Celery tasks so they register with the worker
-
-### `app/config.py`
-
-| Class | Purpose |
-|-------|---------|
-| `Config` | Base settings from environment variables |
-| `DevelopmentConfig` | `DEBUG=True`, `SimpleCache`, `CELERY_TASK_ALWAYS_EAGER=True` (no Redis needed) |
-| `ProductionConfig` | Production flags |
-| `TestingConfig` | In-memory SQLite, LLM disabled |
-
-Key defaults for LLM:
-
-```python
-LLM_PROVIDER = "nvidia"
-LLM_MODEL = "deepseek-ai/deepseek-v4-pro"
-NVIDIA_API_BASE = "https://integrate.api.nvidia.com/v1"
-```
-
-### `app/extensions.py`
-
-| Object | Library | Purpose |
-|--------|---------|---------|
-| `db` | Flask-SQLAlchemy | ORM and migrations |
-| `cache` | Flask-Caching | Enrichment + LLM response cache |
-| `celery_app` | Celery | Async task broker |
-| `limiter` | Flask-Limiter | Rate limit uploads (10/hour) |
-| `login_manager` | Flask-Login | Optional authentication |
-
-`init_celery(app, celery_app)` wraps every Celery task in Flask application context so `db.session` works inside workers.
-
----
-
-## 6. Database Models
-
-All models live in `app/models/analysis.py`.
-
-### `Analysis`
-
-Represents one uploaded PCAP and its pipeline state.
-
-| Field | Type | Meaning |
-|-------|------|---------|
-| `id` | UUID string | Primary key, returned to client after upload |
-| `filename` | str | Original upload name |
-| `file_path` | str | UUID-based path on disk |
-| `status` | enum string | `queued` → `parsing` → `enriching` → `analyzing` → `complete` / `failed` |
-| `progress_pct` | int 0–100 | Frontend progress bar value |
-| `risk_score` | float 0–10 | Composite severity from findings |
-| `summary_json` | JSON | Dashboard stats, executive summary text |
-| `report_json` | JSON | Full assembled report for UI/export |
-
-**Method:** `to_dict()` — serializes for REST API responses.
-
-### `Flow`
-
-One reconstructed network flow (5-tuple + statistics + artifacts).
-
-| Field group | Examples |
-|-------------|----------|
-| Identity | `src_ip`, `dst_ip`, `src_port`, `dst_port`, `protocol` |
-| Statistics | `bytes_sent`, `bytes_recv`, `duration_ms`, `packets_sent` |
-| Artifacts | `dns_queries`, `http_hosts`, `tls_sni`, `ja3_hash`, `user_agents` |
-| Scoring | `anomaly_score`, `severity_score`, `rule_flags`, `is_whitelisted` |
-| Enrichment | `enrichment_json` — merged provider results |
-
-### `Observable`
-
-A unique indicator extracted from traffic (deduplicated per analysis).
-
-| Field | Meaning |
-|-------|---------|
-| `type` | `ip`, `domain`, `ja3`, `cert_hash`, `url`, `user_agent` |
-| `value` | The indicator string |
-| `enrichment_status` | `pending`, `complete`, `error`, `cached` |
-| `is_malicious` | Unified verdict from all providers |
-| `confidence` | 0.0–1.0 agreement score |
-
-### `Finding`
-
-A security detection result (from rules, ML, or LLM).
-
-| Field | Meaning |
-|-------|---------|
-| `rule_id` | e.g. `BEACON-001`, `ML-ANOMALY-001` |
-| `source` | `rule`, `ml`, `llm`, `ti_correlation` |
-| `severity` | `critical`, `high`, `medium`, `low`, `info` |
-| `evidence` | JSON with flows, IPs, stats that triggered the rule |
-| `mitre_tactic` / `mitre_technique` | ATT&CK mapping |
-| `llm_explanation` | DeepSeek-generated plain-English text |
-| `recommendation` | Actionable analyst next step |
-| `is_false_positive` | Set via analyst feedback API |
-
----
-
-## 7. Analysis Pipeline (Celery Tasks)
-
-Defined in `app/tasks/analysis_tasks.py`. Tasks chain automatically — each task calls `.delay()` on the next.
-
-### Progress mapping
-
-| Stage | Task | Progress % | What happens |
-|-------|------|------------|--------------|
-| 1 | `parse_pcap` | 0 → 25 | Read PCAP, create Flow + Observable rows |
-| 2 | `enrich_observables` | 25 → 55 | Async API fan-out per observable |
-| 3 | `run_detections` | 55 → 70 | YAML rules + Isolation Forest |
-| 4 | `run_llm_analysis` | 70 → 90 | DeepSeek enriches findings |
-| 5 | `build_report` | 90 → 100 | Executive summary, hypotheses, report JSON |
-
-### Function reference
-
-#### `run_analysis(analysis_id)`
-Entry point called from `/api/upload`. Dispatches `parse_pcap.delay(analysis_id)`.
-
-#### `parse_pcap(analysis_id)`
-- Instantiates `PCAPParser(file_path)`
-- Calls `parser.parse(progress_callback=...)` — streams packets, builds flows
-- Inserts `Flow` and `Observable` rows into database
-- Sets `analysis.total_flows`
-- Chains to `enrich_observables`
-
-#### `enrich_observables(analysis_id, arp_events)`
-- Creates `EnrichmentOrchestrator` with app config
-- Runs `enrich_analysis_sync()` — asyncio event loop inside worker
-- Updates each `Observable.enrichment_json`, `is_malicious`, `confidence`
-- Chains to `run_detections`
-
-#### `run_detections(analysis_id, arp_events)`
-- Loads all flows and observables from DB
-- Runs `DetectionEngine.run()` — returns list of `Finding` objects
-- Saves findings, updates flow `anomaly_score`
-- Chains to `run_llm_analysis`
-
-#### `run_llm_analysis(analysis_id)`
-- Creates `LLMAnalyst` → calls `enrich_findings()` for medium+ severity findings
-- Chains to `build_report` (even if LLM fails)
-
-#### `build_report(analysis_id)`
-- `LLMAnalyst.generate_executive_summary()` — one DeepSeek call
-- `LLMAnalyst.generate_hunt_hypotheses()` — one DeepSeek call
-- `ReportBuilder.build()` — assembles charts, metrics, geo markers
-- Sets `status=complete`, `progress_pct=100`, `completed_at`
-
-#### `_update_progress(analysis_id, status, pct)`
-Helper that commits `Analysis.status` and `Analysis.progress_pct` to DB.
-
----
-
-## 8. PCAP Parser
-
-**File:** `app/services/pcap_parser.py`
-
-### Class: `PCAPParser`
-
-#### `__init__(file_path)`
-Stores path and initializes empty `flows`, `arp_events`, `observables` dicts.
-
-#### `parse(progress_callback=None) → dict`
-Main entry point:
-1. Detects PCAP vs PCAPNG magic bytes
-2. Iterates packets with `dpkt.pcap.Reader` or `dpkt.pcapng.Reader`
-3. Calls `_process_packet(ts, buf)` for each packet
-4. Returns `{"flows": [...], "observables": [...], "arp_events": [...]}`
-
-#### `_process_packet(ts, buf)`
-- Parses Ethernet frame
-- Handles ARP → appends to `arp_events`
-- Handles IP → dispatches TCP, UDP, or ICMP
-- Creates/updates `FlowState` dataclass per 5-tuple
-
-#### `_inspect_tcp_payload(flow, tcp, ...)`
-Extracts application-layer data:
-- **TLS/443:** SNI via `_extract_sni()`, JA3 via `_compute_ja3()`
-- **HTTP/80:** Host header, User-Agent from `dpkt.http.Request`
-- **SSH/445/3389:** Sets `application_layer` label
-
-#### `_inspect_udp_payload(flow, udp, ...)`
-- Port 53 → parses `dpkt.dns.DNS`, extracts query names
-
-#### `_track_observable(type, value, ts)`
-Deduplicates observables; increments `occurrence_count`.
-
-### Helper functions
-
-| Function | Purpose |
-|----------|---------|
-| `validate_pcap_magic(file_path)` | Server-side file validation (not just extension) |
-| `is_private_ip(ip)` / `is_external_ip(ip)` | RFC1918 checks for detection rules |
-| `_extract_sni(data)` | Manual TLS ClientHello SNI parse |
-| `_compute_ja3(tls)` | MD5 of cipher/extension string |
-
-### `FlowState` dataclass
-In-memory flow accumulator before DB insert — holds packet times, DNS sets, HTTP hosts, TLS fields.
-
----
-
-## 9. Enrichment Layer
-
-**Orchestrator:** `app/services/enrichment/orchestrator.py`
-
-### Class: `EnrichmentOrchestrator`
-
-#### Routing logic
-
-| Observable type | Providers called |
-|-----------------|------------------|
-| `ip` | VirusTotal, AbuseIPDB, geo (ip-api), WHOIS (rDNS) |
-| `domain` | VirusTotal, WHOIS |
-
-#### Key methods
-
-| Method | Description |
-|--------|-------------|
-| `_cache_key(provider, type, value)` | Redis key: `enrich:{provider}:{type}:{hash}` |
-| `_get_cached` / `_set_cache` | 24-hour TTL (configurable) |
-| `_enrich_ip(ip)` | Concurrent async calls to all IP providers |
-| `_enrich_domain(domain)` | VT + WHOIS |
-| `_compute_verdict(enrichment)` | Merges provider signals → `is_malicious`, `confidence` |
-| `enrich_observable(obs)` | Single observable enrichment |
-| `enrich_all(analysis_id)` | Semaphore-limited parallel enrichment of all observables |
-| `enrich_analysis_sync(analysis_id)` | `asyncio.run()` wrapper for Celery |
-
-#### Verdict thresholds
-
-| Provider | Flag condition |
-|----------|----------------|
-| VirusTotal | `malicious > 2` |
-| AbuseIPDB | `abuseConfidenceScore > 25` |
-| WHOIS | Domain registered < 30 days ago |
-
-### Provider modules
-
-| File | Class | API |
-|------|-------|-----|
-| `virustotal.py` | `VirusTotalClient` | VT v3 REST, token bucket 4 req/min |
-| `abuseipdb.py` | `AbuseIPDBClient` | AbuseIPDB v2 check |
-| `whois_lookup.py` | `WhoisClient` | `python-whois` + `socket.gethostbyaddr` |
-| `geo_asn.py` | `GeoASNClient` | ip-api.com (free) or MaxMind GeoLite2 |
-
----
-
-## 10. Detection Engine
-
-**File:** `app/services/detection/engine.py`
-
-### Class: `DetectionEngine`
-
-#### `__init__(config)`
-- Loads YAML rules via `load_rules(DETECTION_RULES_DIR)`
-- Initializes `WhitelistEngine`
-- Initializes `MLEngine` with threshold and model path
-
-#### `run(analysis_id, flows, arp_events, observables) → list[Finding]`
-1. Marks whitelisted flows (`is_whitelisted=True`)
-2. Evaluates each YAML rule against non-whitelisted flows
-3. Runs ML scoring on all active flows
-4. Returns combined list of `Finding` objects (not yet committed)
-
-#### `_evaluate_rule(rule, flows, arp_events, observables)`
-Dispatches to handler by `rule["id"]`:
-
-| Rule ID | Handler | Logic summary |
-|---------|---------|---------------|
-| `PORTSCAN-001` | `_portscan_horizontal` | >50 ports on same dst IP in 30s |
-| `PORTSCAN-002` | `_portscan_vertical` | Same port on >30 dst IPs in 60s |
-| `BEACON-001` | `_beacon` | Regular intervals, CV < 20% |
-| `BEACON-002` | `_beacon_slow` | Beacon interval > 30 min |
-| `DNSTUNNEL-001` | `_dns_payload` | DNS payload > 200 bytes |
-| `DNSTUNNEL-002` | `_dns_frequency` | >100 queries/min to apex |
-| `DNSTUNNEL-003` | `_dns_entropy` | Subdomain entropy > 3.8 |
-| `ARPSPOOFING-001` | `_arp_gratuitous` | Gratuitous ARP events |
-| `ARPSPOOFING-002` | `_arp_storm` | >50 ARP replies in 10s |
-| `PORTMISMATCH-001` | `_port_mismatch` | SSH/HTTP/DNS on wrong ports |
-| `EXFIL-001` | `_exfil` | Outbound bytes > 10× baseline |
-| `LATERAL-001` | `_lateral` | Internal scan on 445/3389/5985 |
-| `DGATOP-001` | `_dga` | High consonant/vowel ratio or bigram entropy |
-| `TLSNONSNI-001` | `_tls_no_sni` | TLS to external IP without SNI |
-| `CLEARTEXT-001` | `_cleartext` | HTTP POST to auth endpoints |
-| `NEWDOMAIN-001` | `_new_domain` | WHOIS age < 30 days |
-| `LONGCONN-001` | `_long_conn` | TCP flow > 8 hours |
-
-### Rule YAML format (`detection_rules/*.yaml`)
-
-```yaml
-- id: BEACON-001
-  name: Beaconing — periodic outbound connection
-  description: >
-    Repeated connections at regular intervals indicating C2 check-in.
-  severity: high
-  enabled: true
-  mitre_tactic: TA0011 - Command and Control
-  mitre_technique: T1071 - Application Layer Protocol
-  parameters:
-    min_connections: 10
-    max_jitter_pct: 20
-  recommendation: >
-    Isolate the source host and examine the destination certificate.
-```
-
-Rules are loaded by `app/services/detection/rules.py` → `load_rules()` which reads all `*.yaml` files and filters `enabled: false`.
-
-### Scoring (`scoring.py`)
-
-| Function | Purpose |
-|----------|---------|
-| `severity_to_score(severity)` | Maps critical→10, high→8, medium→5, etc. |
-| `compute_analysis_risk_score(findings)` | Top-5 finding average, capped at 10 |
-
----
-
-## 11. ML Anomaly Engine
-
-**File:** `app/services/detection/ml_engine.py`
-
-### Algorithm: Isolation Forest (scikit-learn)
-
-Unsupervised — no labeled malware required. Flows that are "easy to isolate" in feature space are anomalous.
-
-### Feature vector (20 dimensions, schema v3)
-
-Shared contract in `app/services/detection/features.py` — identical for CIC-IDS2017
-training, PCAP analysis, and Suricata live flows.
-
-| Feature | Transform |
-|---------|-----------|
-| `dst_port` | Raw port number |
-| `duration_ms_log` | log1p(duration in ms) |
-| `fwd_packets`, `bwd_packets` | Directional packet counts |
-| `fwd_bytes_log`, `bwd_bytes_log` | log1p(directional bytes) |
-| `flow_bytes_per_s`, `flow_packets_per_s` | Throughput rates |
-| `fwd_pkt_len_mean`, `bwd_pkt_len_mean` | Mean packet size per direction |
-| `pkt_size_avg` | Mean packet size overall |
-| `down_up_ratio` | bwd packets / fwd packets |
-| `iat_mean`, `iat_std`, `iat_max`, `fwd_iat_mean` | Inter-arrival time stats (seconds) |
-| `dst_port_entropy` | Entropy of ports accessed by src IP (rolling window in live mode) |
-| `is_external_dst` | 1 if dst not RFC1918 |
-| `time_of_day_hour` | 0–23 |
-| `protocol_encoded` | TCP=1, UDP=2, ICMP=3 |
-
-### Class: `MLEngine`
-
-| Method | Description |
-|--------|-------------|
-| `score_flows(flows)` | Builds feature matrix, runs Isolation Forest, returns calibrated scores + explanations |
-| `_simple_explanations(features_df, scores)` | Text: "flagged due to unusual {feature}" |
-
-### Training modes
-
-1. **No baseline model** — fits Isolation Forest on first 80% of flows in the capture (dev only, `ML_TRAIN_ON_PCAP_FALLBACK=true`)
-2. **Pre-trained** — loads `ml_models/isolation_forest_base.pkl` if present
-
-### Score calibration
-
-Raw `decision_function` output is mapped to a **0–10** scale via `ScoreCalibrator`
-using bounds saved at training time (`ml_models/score_calibration.json`):
-
-- **5.0** = the model's decision boundary (`predict() == -1` starts here)
-- **0** = most normal benign training flow, **10** = extreme anomaly
-
-Flows scoring at or above `ML_ANOMALY_THRESHOLD` (default **5.0**) create a `Finding`
-with `source='ml'`. Tune the threshold with `python scripts/tune_threshold.py`, which
-sweeps 3.0–9.0 and recommends the best-F1 point with the benign FP rate capped at 10%.
-
----
-
-## 12. LLM Layer (NVIDIA NIM / DeepSeek V4)
-
-**Default provider:** NVIDIA free NIM API with **DeepSeek V4 Pro**.
-
-Get a free API key at [build.nvidia.com](https://build.nvidia.com) → copy `nvapi-...` key.
-
-### Architecture
-
-```
-LLMAnalyst (analyst.py)
-    └── get_provider(config) → NVIDIAProvider | OpenAIProvider | AnthropicProvider
-            └── complete(system, user, temperature) → raw text
-                    └── parse_json_response() → dict
-                            └── complete_with_retry() → up to 3 attempts
-```
-
-### `app/services/llm/provider.py`
-
-#### `NVIDIAProvider` (default)
-
-Uses the **OpenAI Python SDK** pointed at NVIDIA's endpoint:
-
-```python
-client = OpenAI(
-    base_url="https://integrate.api.nvidia.com/v1",
-    api_key=os.environ["NVIDIA_API_KEY"],
-)
-response = client.chat.completions.create(
-    model="deepseek-ai/deepseek-v4-pro",
-    messages=[{"role": "system", ...}, {"role": "user", ...}],
-    extra_body={"chat_template_kwargs": {"thinking": False}},  # reliable JSON
-)
-```
-
-| Model | Use case |
-|-------|----------|
-| `deepseek-ai/deepseek-v4-pro` | Best quality (default) — finding analysis, summaries |
-| `deepseek-ai/deepseek-v4-flash` | Faster, lower latency — high-volume or dev |
-
-#### Other providers
-
-| Class | When to use |
-|-------|-------------|
-| `OpenAIProvider` | Set `LLM_PROVIDER=openai`, `LLM_API_KEY=sk-...` |
-| `AnthropicProvider` | Set `LLM_PROVIDER=anthropic` |
-
-#### Utility functions
-
-| Function | Purpose |
-|----------|---------|
-| `get_provider(config)` | Factory — reads `LLM_PROVIDER` env var |
-| `parse_json_response(text)` | Extracts JSON from LLM output (handles markdown fences) |
-| `complete_with_retry(...)` | Exponential backoff, max 3 retries |
-
-### `app/services/llm/analyst.py` — `LLMAnalyst`
-
-| Method | Temperature | Output |
-|--------|-------------|--------|
-| `enrich_findings(analysis_id)` | 0.2 | Per-finding JSON: explanation, recommendation, confidence |
-| `generate_executive_summary(analysis_id)` | 0.3 | 3–5 paragraph stakeholder summary |
-| `generate_hunt_hypotheses(analysis_id)` | 0.5 | 3–5 investigation hypotheses with steps |
-
-**Cost control:** `_call_count` capped at `LLM_MAX_CALLS_PER_ANALYSIS` (default 25). Responses cached in Redis by SHA256 of input — reload never re-queries.
-
-### `app/services/llm/prompts.py`
-
-Template strings: `SYSTEM_ANALYST`, `FINDING_PROMPT`, `EXECUTIVE_SUMMARY_PROMPT`, `HUNT_HYPOTHESES_PROMPT`.
-
-The LLM **never receives raw packet bytes** — only structured JSON metadata (flow stats, enrichment verdicts, MITRE context).
-
----
-
-## 13. Report Builder
-
-**File:** `app/services/report_builder.py`
-
-### Class: `ReportBuilder`
-
-#### `build(analysis_id, executive_summary, hunt_hypotheses) → dict`
-
-Assembles the final report object stored in `Analysis.report_json`:
-
-| Section | Contents |
-|---------|----------|
-| `analysis` | Analysis metadata via `to_dict()` |
-| `executive_summary` | DeepSeek-generated text |
-| `hunt_hypotheses` | List of hypothesis cards |
-| `risk_score` | From `compute_analysis_risk_score()` |
-| `metrics` | Flow counts, external IPs, malicious IOCs, severity breakdown |
-| `charts` | Protocol pie, top talkers, traffic timeline, DNS top domains, port heatmap |
-| `geo_markers` | Lat/lon from ip-api enrichment for Leaflet map |
-
----
-
-## 14. Web UI & REST API
-
-### HTML pages (`app/routes/main.py`)
-
-| Route | Template | Purpose |
-|-------|----------|---------|
-| `GET /` | `index.html` | Drag-and-drop PCAP upload |
-| `GET /dashboard` | `dashboard.html` | Analysis history table |
-| `GET /analysis/<id>` | `analysis_progress.html` | Live progress bar (polls API) |
-| `GET /report/<id>` | `report.html` | Full 8-section report |
-
-### JavaScript
-
-| File | Role |
-|------|------|
-| `static/js/upload.js` | Client validation, `POST /api/upload`, redirect to progress |
-| `static/js/report.js` | Leaflet threat map, false-positive feedback |
-| `static/js/charts.js` | Chart.js: risk gauge, protocol pie, talkers, timeline |
-
-### REST API (`app/routes/api.py`)
-
-| Method | Endpoint | Function |
-|--------|----------|----------|
-| POST | `/api/upload` | `upload()` — validate PCAP, save file, enqueue `run_analysis` |
-| GET | `/api/analysis/<id>/status` | `analysis_status()` — poll progress |
-| GET | `/api/analysis/<id>/summary` | Top stats + report |
-| GET | `/api/analysis/<id>/findings` | Filterable findings list |
-| GET | `/api/analysis/<id>/flows` | Paginated flow table |
-| GET | `/api/analysis/<id>/observables` | Enriched IOCs |
-| GET | `/api/analysis/<id>/report.json` | Full report JSON |
-| GET | `/api/analysis/<id>/report.html` | Self-contained HTML export |
-| GET | `/api/analysis/<id>/stix2.json` | STIX2 bundle |
-| GET | `/api/analysis/<id>/export.csv` | Flows CSV download |
-| DELETE | `/api/analysis/<id>` | Delete analysis + PCAP file |
-| POST | `/api/analysis/<id>/feedback` | Mark finding false positive |
-| GET | `/api/health` | Health + API key status |
-
----
-
-## 15. Whitelist Engine
-
-**File:** `detection_rules/../whitelist/default_whitelist.yaml`  
-**Class:** `WhitelistEngine` in `detection/engine.py`
-
-Excludes known-good traffic from findings:
-
-| Rule type | Example |
-|-----------|---------|
-| CIDR ranges | Cloudflare, Google DNS, CloudFront |
-| Domain patterns | `*.google.com`, `windowsupdate.microsoft.com` |
-| Port/protocol | UDP/53, TCP/443, TCP/80 |
-
-`is_whitelisted_flow(flow_dict)` sets `Flow.is_whitelisted=True`; whitelisted flows skip rule evaluation.
-
----
-
-## 16. Configuration Reference
-
-Copy `.env.example` to `.env`:
-
-```bash
-# NVIDIA NIM — default LLM (free at build.nvidia.com)
-LLM_PROVIDER=nvidia
-NVIDIA_API_KEY=nvapi-your-key-here
-NVIDIA_API_BASE=https://integrate.api.nvidia.com/v1
-LLM_MODEL=deepseek-ai/deepseek-v4-pro
-LLM_MAX_TOKENS=2048
-LLM_MAX_CALLS_PER_ANALYSIS=25
-LLM_ENABLED=true
-
-# Optional enrichment
-VIRUSTOTAL_API_KEY=
-ABUSEIPDB_API_KEY=
-
-# Database
-DATABASE_URL=sqlite:///packeteye.db
-
-# Dev mode (no Redis)
-CELERY_TASK_ALWAYS_EAGER=true
-CACHE_TYPE=SimpleCache
-```
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `LLM_PROVIDER` | `nvidia` | `nvidia`, `openai`, or `anthropic` |
-| `NVIDIA_API_KEY` | — | `nvapi-...` from build.nvidia.com |
-| `LLM_MODEL` | `deepseek-ai/deepseek-v4-pro` | Or `deepseek-ai/deepseek-v4-flash` |
-| `ML_ANOMALY_THRESHOLD` | `5.0` | Flows scoring above this create ML findings (5.0 = IF decision boundary; tune with `scripts/tune_threshold.py`) |
-| `MAX_UPLOAD_MB` | `500` | Upload size limit |
-| `WHITELIST_ENABLED` | `true` | Toggle whitelist filtering |
-
----
-
-## 17. Quick Start
+### Install
 
 ```powershell
 cd packetEye
@@ -744,13 +81,44 @@ python -m venv venv
 .\venv\Scripts\activate
 pip install -r requirements.txt
 copy .env.example .env
-# Edit .env — add your NVIDIA_API_KEY from build.nvidia.com
+```
+
+Edit `.env` — minimum for LLM: `NVIDIA_API_KEY` from [build.nvidia.com](https://build.nvidia.com).
+
+### Run (development)
+
+```powershell
 python run.py
 ```
 
-Open **http://localhost:5000**, upload a `.pcap` file, watch progress, view report.
+Open **http://127.0.0.1:5050** (Windows may block port 5000; `run.py` auto-falls back to 5050).
 
-### Production (with Redis + Celery worker)
+### First PCAP analysis
+
+1. Go to **Upload** → drop a `.pcap` file.
+2. Watch progress on the analysis page (polls every 3s).
+3. Open the **Report** when complete.
+
+### First live NIDS session
+
+1. Set `LIVE_MONITOR_ENABLED=true` and `SURICATA_EVE_PATH` (or start capture from UI).
+2. Open **Live Monitor** → **Capture** tab → Start capture + ML.
+3. Watch alerts on **SOC Overview**.
+
+### Malicious traffic validation (soak test)
+
+```bash
+# Terminal 1
+python run.py
+
+# Terminal 2 (Git Bash / WSL / Linux)
+chmod +x scripts/run_nids_soak_test.sh
+./scripts/run_nids_soak_test.sh --interface eth0
+```
+
+Requires `CAPTURE_LAB_ENABLED=true`. See [docs/NIDS_SETUP.md](docs/NIDS_SETUP.md).
+
+### Production (Redis + Celery)
 
 ```powershell
 # Terminal 1
@@ -760,7 +128,7 @@ python run.py
 celery -A celery_worker.celery_app worker --loglevel=info
 ```
 
-### Run tests
+### Tests
 
 ```powershell
 pytest tests/ -v
@@ -768,55 +136,552 @@ pytest tests/ -v
 
 ---
 
-## 19. NIDS Integration (Isolation Forest + Suricata Live)
+## 4. Feature Guide
 
-packetEye now supports a full NIDS workflow alongside PCAP forensics:
+### 4.1 PCAP Forensics Pipeline
 
-| Mode | Path |
-|------|------|
-| **Offline training** | `python scripts/train_baseline.py` — CIC-IDS2017 Monday BENIGN |
-| **Evaluation** | `python scripts/evaluate_model.py` — Tue–Fri metrics |
-| **PCAP analysis** | Existing upload pipeline uses baseline model + scaler |
-| **Live monitoring** | Suricata EVE → `/api/live/start` → Live Monitor UI |
+**Logic:** Upload → parse → enrich → detect → LLM → report (Celery chain, or inline when `CELERY_TASK_ALWAYS_EAGER=true`).
 
-### ML artifacts (`ml_models/`)
+```
+POST /api/upload
+  → parse_pcap        (0–25%)   dpkt → Flow + Observable rows
+  → enrich_observables (25–55%) async OSINT fan-out
+  → run_detections    (55–70%)  YAML rules + Isolation Forest
+  → run_llm_analysis  (70–90%)  finding narratives + summary
+  → build_report      (90–100%) charts, geo, export JSON
+```
+
+| Stage | What happens |
+|-------|----------------|
+| **Parse** | Reconstruct flows; extract DNS, HTTP Host, TLS SNI, JA3, ARP |
+| **Enrich** | VirusTotal, AbuseIPDB, geo, WHOIS per observable (Redis cache, 24h TTL) |
+| **Detect** | 17 YAML rules + ML scoring; whitelist skips known-good traffic |
+| **LLM** | DeepSeek (via NVIDIA NIM) explains findings, executive summary, hunt hypotheses |
+| **Report** | Risk score, Chart.js metrics, Leaflet geo map, STIX2/CSV export |
+
+**Key files:** `app/services/pcap_parser.py`, `app/tasks/analysis_tasks.py`, `app/services/report_builder.py`
+
+**Enrichment mode:** `ENRICHMENT_MODE=bulk` (legacy, all observables at ingest) or `on_investigate` (OSINT only when analyst investigates — default).
+
+---
+
+### 4.2 Live NIDS & SOC Ops Center
+
+**UI:** `/live` — unified tabs: Overview, Capture, ML, Suricata, Lab.
+
+**Logic:**
+
+1. **Start live session** — `POST /api/live/start` with mode `suricata` or `tcpdump`.
+2. **Attach ML** — `ml_capture.attach_ml_to_capture()` creates a live `Analysis` row and starts `LiveMonitor`.
+3. **Ingest flows** — Suricata EVE `flow` events or Scapy packet feed → feature extraction → Isolation Forest.
+4. **Emit alerts** — Scores ≥ `ML_ANOMALY_THRESHOLD` (default 5.0) → `AlertService` → SOC queue + optional webhook.
+5. **Suricata alerts** — When `LIVE_INGEST_SURICATA_ALERTS=true`, signature hits appear alongside ML alerts.
+6. **Correlation** — ML + Suricata hits on same host pair within `LIVE_CORRELATION_WINDOW` seconds are linked.
+
+**Enhanced alerts** (`ALERT_ENHANCED_ANALYSIS=true`, `LLM_LIVE_ALERT_SYNTHESIS=true`):
+
+- On emit: async OSINT on destination IP + LLM maps traffic to CIC-IDS2017 labels.
+- CDN/cloud FP suppression via `ml_alert_suppressed()` in `app/services/net_utils.py`.
+
+**Key files:** `app/services/live/monitor.py`, `app/services/live/alert_service.py`, `app/services/live/alert_enricher.py`
+
+---
+
+### 4.3 ML Anomaly Detection
+
+**Algorithm:** scikit-learn **Isolation Forest** (unsupervised).
+
+**Training:** CIC-IDS2017 all-days **BENIGN** traffic → `scripts/train_baseline.py` or interactive `scripts/train_tracker.py`.
+
+**Artifacts** (`ml_models/`):
 
 | File | Purpose |
 |------|---------|
-| `isolation_forest_base.pkl` | Trained Isolation Forest |
-| `feature_scaler.pkl` | MinMaxScaler fit on Monday BENIGN |
-| `feature_schema.json` | 16-feature column order |
+| `isolation_forest_base.pkl` | Trained model |
+| `feature_scaler.pkl` | MinMaxScaler |
+| `feature_schema.json` | 20-feature column order (schema v3) |
+| `score_calibration.json` | Maps raw scores → 0–10 scale (5.0 = decision boundary) |
+| `recommended_threshold.json` | Output of `scripts/tune_threshold.py` |
 | `benchmark_results.json` | CIC evaluation metrics |
 
-### Live API
+**20 features** (shared across PCAP, live EVE, tcpdump):
 
-| Method | Endpoint | Purpose |
-|--------|----------|---------|
-| POST | `/api/live/start` | Start Suricata EVE consumer |
-| POST | `/api/live/stop` | Stop live session |
-| GET | `/api/live/status?session_id=` | Session stats |
-| GET | `/api/live/alerts?session_id=` | Recent ML alerts |
-| GET | `/api/ml/benchmark` | CIC benchmark JSON |
+`dst_port`, `duration_ms_log`, directional packets/bytes, throughput rates, packet size stats, IAT stats, `dst_port_entropy`, `is_external_dst`, `time_of_day_hour`, `protocol_encoded`.
 
-See [docs/NIDS_SETUP.md](docs/NIDS_SETUP.md) and [docs/SURICATA_SETUP.md](docs/SURICATA_SETUP.md).
+**Scoring logic:**
 
-### Database migration (existing installs)
+- Raw `decision_function` → calibrated 0–10 via `ScoreCalibrator`.
+- Flows ≥ threshold → `Finding` with `source='ml'`.
+- Tune with `python scripts/tune_threshold.py` → set `ML_ANOMALY_THRESHOLD` in `.env`.
 
-```powershell
-python scripts/migrate_db.py
+---
+
+### 4.4 Rule-Based Detection
+
+**Location:** `detection_rules/*.yaml` — no code change needed to add rules.
+
+| Rule family | Examples |
+|-------------|----------|
+| Port scan | Horizontal (>50 ports/dst), vertical (>30 IPs/port) |
+| Beaconing | Regular intervals (CV < 20%), slow beacon (>30 min) |
+| DNS tunnel | Large payloads, high frequency, high subdomain entropy |
+| ARP | Gratuitous ARP, ARP storms |
+| Protocol mismatch | SSH/HTTP/DNS on wrong ports |
+| Exfil / lateral | Outbound byte spikes, internal SMB/RDP scan |
+| DGA / TLS / cleartext | Domain generation, TLS without SNI, HTTP auth POST |
+| Long connection | TCP > 8 hours |
+
+**Engine:** `DetectionEngine.run()` evaluates rules → creates `Finding` rows with MITRE tactic/technique, evidence JSON, recommendations.
+
+**PCAP Suricata replay:** When `PCAP_SURICATA_ENABLED=true`, uploaded PCAPs are replayed against `deploy/suricata/custom.rules`.
+
+---
+
+### 4.5 OSINT Enrichment
+
+**Orchestrator:** `app/services/enrichment/orchestrator.py` — async fan-out with Redis cache.
+
+**IP providers:**
+
+| Provider | Key required | Verdict weight |
+|----------|--------------|----------------|
+| VirusTotal | Yes | High (`malicious > 2`) |
+| AbuseIPDB | Yes | High (`abuseConfidenceScore > 25`) |
+| OTX | Optional | Medium (`pulse_count > 2`) |
+| GreyNoise | Optional | High (classification = malicious) |
+| AnyRun TI Lookup | Optional | High (`threat_level >= 2`) |
+| Shodan API | Optional | Context |
+| Shodan InternetDB | No | Context (vulns boost confidence) |
+| Pulsedive | Optional | Context |
+| IPInfo | Optional | Context |
+| ThreatFox | No | Context |
+| Geo / WHOIS | Optional / No | Context |
+
+**Domain providers:** VT, WHOIS, OTX, crt.sh, URLScan, AnyRun.
+
+**Investigate flow:** `POST /api/investigate/finding/<id>` → on-demand lookup → verdict breakdown UI with per-provider signals.
+
+**Key files:** `app/services/enrichment/`, `app/static/js/osint_detail.js`, `app/static/js/investigate.js`
+
+---
+
+### 4.6 LLM Intelligence (Ensemble)
+
+**Default stack:**
+
+1. **Primary** — NVIDIA NIM `deepseek-ai/deepseek-v4-pro` (`integrate.api.nvidia.com`)
+2. **Secondary** — NVIDIA NIM `z-ai/glm-5.2` (parallel on big tasks)
+3. **Fallback** — OpenRouter (`OPENROUTER_API_KEY`)
+
+**Ensemble logic** (`app/services/llm/ensemble.py`):
+
+| Task type | Behavior |
+|-----------|----------|
+| Big tasks (exec summary, hunt, live alerts, findings) | Primary + GLM in **parallel** → synthesis prompt merges to one JSON conclusion |
+| Chat (large context) | Same parallel + merge for Markdown |
+| Any failure | Fallback chain: primary → GLM → OpenRouter |
+
+**Use cases:**
+
+| Component | Output |
+|-----------|--------|
+| `LLMAnalyst.enrich_findings()` | Per-finding explanation, recommendation, confidence |
+| `generate_executive_summary()` | Stakeholder narrative |
+| `generate_hunt_hypotheses()` | 3–5 investigation hypotheses |
+| `alert_enricher` | Live alert CIC label, severity, FP risk |
+| SOC chatbot | Markdown tables, mermaid diagrams |
+
+**Safety:** LLM receives structured JSON metadata only — never raw packet bytes. Responses cached in Redis by input hash. Circuit breaker after consecutive failures.
+
+---
+
+### 4.7 Lab Traffic & Malicious Soak Validation
+
+**Purpose:** Generate synthetic CIC-IDS2017-style attacks to validate that NIDS + ML + alerts work end-to-end.
+
+**13 attack patterns** (`app/services/lab/patterns.py`):
+
+`portscan`, `bot`, `ddos`, `dos_goldeneye`, `dos_hulk`, `dos_slowhttptest`, `dos_slowloris`, `ftp_patator`, `ssh_patator`, `web_brute`, `dns`, `infiltration`, `arp`
+
+**Components:**
+
+| Component | Role |
+|-----------|------|
+| `scripts/generate_test_traffic.py` | Scapy packet generator (`--forever`, `--pattern all`) |
+| `app/services/lab/traffic_runner.py` | Background process + live log |
+| `app/services/lab/nids_test_runner.py` | Capture + ML + lab + coverage tracking |
+| `scripts/run_nids_soak_test.sh` | CLI soak until Ctrl+C |
+
+**Coverage tracking:** For each pattern rotation, tracks whether **ML** and **Suricata** alerts increased → `pattern_coverage` in `/api/nids-test/status`.
+
+**How to run:**
+
+```bash
+# CLI
+./scripts/run_nids_soak_test.sh --interface eth0 --rotate 12
+
+# Dashboard
+Live → Lab → NIDS + ML Soak Test
+
+# API
+POST /api/nids-test/start  {"with_lab": true, "rotate_sec": 12}
+GET  /api/nids-test/status   → pattern_coverage[]
+POST /api/nids-test/stop
+```
+
+**Requirements:** `CAPTURE_LAB_ENABLED=true`, `LIVE_MONITOR_ENABLED=true`. Linux/WSL recommended for Scapy injection; Windows can monitor external Suricata EVE with `--no-lab`.
+
+One full rotation ≈ 13 patterns × 12s ≈ **2.5 minutes**.
+
+---
+
+### 4.8 Suricata Integration
+
+**Features:**
+
+- Process management (start/stop from browser on Linux sensors)
+- EVE path auto-discovery from `suricata.yaml` (`AUTO_SYNC_EVE=true`)
+- External Suricata plug-in: import EVE, rebind without restart
+- Custom rules in `deploy/suricata/custom.rules`
+- Live table with row actions, selected export
+- Diagnostics, interface list, preflight checks
+
+**Key files:** `app/services/live/suricata_manager.py`, `app/static/js/live_suricata.js`
+
+See [docs/SURICATA_SETUP.md](docs/SURICATA_SETUP.md).
+
+---
+
+### 4.9 Unified Capture (tcpdump / Suricata)
+
+**Modes** (`CAPTURE_MODE`):
+
+| Mode | Capture | ML input |
+|------|---------|----------|
+| `suricata` | Suricata on mirror interface → EVE JSON | EVE flow events |
+| `tcpdump` | Rotating PCAP chunks | Scapy live packet feed |
+
+**API:** `POST /api/capture/start`, `POST /api/capture/stop`, `GET /api/capture/status`
+
+**Export:** PCAP chunks, EVE JSON, packet summaries.
+
+**Linux notes:** Run as root (`sudo python run.py`). Avoid tcpdump writes under `$HOME` on Kali (AppArmor) — use `/tmp/packeteye/chunks-*` or set `TCPDUMP_CHUNK_DIR`.
+
+---
+
+### 4.10 SOC Chatbot
+
+**UI:** Floating chat widget on live/report pages.
+
+**Logic:** `POST /api/chat` → builds rich JSON context (flows, findings, alerts, OSINT) → LLM ensemble → Markdown reply with tables and optional mermaid attack-path diagrams.
+
+**Config:** `CHATBOT_ENABLED=true`, `CHATBOT_MAX_HISTORY=10`, `CHATBOT_MAX_CONTEXT_CHARS=32000`
+
+---
+
+### 4.11 Reports & Export
+
+| Format | Endpoint |
+|--------|----------|
+| Interactive HTML | `/report/<id>` |
+| JSON report | `GET /api/analysis/<id>/report.json` |
+| HTML export | `GET /api/analysis/<id>/report.html` |
+| STIX2 bundle | `GET /api/analysis/<id>/stix2.json` |
+| Flows CSV | `GET /api/analysis/<id>/export.csv` |
+| Suricata EVE export | `GET /api/suricata/export` |
+| PCAP / chunks | `GET /api/capture/export-packets`, `/api/capture/download-chunks` |
+
+**Report sections:** Executive summary, hunt hypotheses, risk gauge, protocol pie, top talkers, timeline, DNS chart, port heatmap, Leaflet threat map.
+
+---
+
+### 4.12 Alert Webhooks
+
+**Config:** `ALERT_WEBHOOK_URL` (Discord-compatible), `ALERT_WEBHOOK_MIN_SEVERITY`, `ALERT_WEBHOOK_RATE_LIMIT`.
+
+**Logic:** On live alert emit, if severity ≥ minimum and rate limit allows → POST embed JSON to webhook.
+
+**Test:** `POST /api/webhook/test`
+
+---
+
+### 4.13 Whitelist & False-Positive Control
+
+**File:** `whitelist/default_whitelist.yaml` — CIDR ranges, domain patterns, port/protocol allowlists (Cloudflare, Google DNS, etc.).
+
+**Logic:** Whitelisted flows skip rule evaluation and ML alert emission. Analysts mark findings FP via `POST /api/analysis/<id>/feedback`.
+
+**Live FP:** CDN/cloud suppression in `ml_alert_suppressed()`; mark-FP action in SOC inspector.
+
+---
+
+## 5. Architecture
+
+```mermaid
+flowchart TB
+    subgraph ui [Web UI Bootstrap 5]
+        Upload[Upload / Dashboard]
+        LiveOps[Live SOC Ops Center]
+        Report[Report + Chat]
+    end
+
+    subgraph flask [Flask App]
+        API[api.py REST]
+        Models[(SQLAlchemy)]
+    end
+
+    subgraph forensics [PCAP Forensics]
+        Parse[pcap_parser]
+        Enrich[enrichment orchestrator]
+        Detect[detection engine]
+        ML[Isolation Forest]
+        LLM[LLM ensemble]
+        RB[report_builder]
+    end
+
+    subgraph live [Live NIDS]
+        Monitor[LiveMonitor]
+        Alerts[AlertService]
+        Enricher[alert_enricher]
+        Lab[lab traffic + soak]
+    end
+
+    subgraph external [External]
+        Redis[(Redis cache)]
+        DB[(SQLite / PostgreSQL)]
+        NVIDIA[NVIDIA NIM API]
+        OSINT[VT AbuseIPDB OTX AnyRun ...]
+        Suricata[Suricata EVE]
+    end
+
+    Upload --> API
+    LiveOps --> API
+    API --> Parse --> Enrich --> Detect
+    Detect --> ML --> LLM --> RB
+    API --> Monitor
+    Monitor --> ML
+    Monitor --> Alerts --> Enricher
+    Lab --> Monitor
+    Enrich --> OSINT
+    LLM --> NVIDIA
+    Enricher --> OSINT
+    Enricher --> LLM
+    Models --> DB
+    Enrich --> Redis
 ```
 
 ---
 
-## 18. Security Notes
+## 6. REST API Reference
 
-- **Never commit `.env`** — it is listed in `.gitignore`. API keys belong only in environment variables.
-- **Rotate exposed keys** — if a key was shared in chat or logs, regenerate it at build.nvidia.com.
-- PCAP files may contain credentials — stored with restricted permissions under `data/uploads/`.
-- Upload rate limited to 10/hour per IP via Flask-Limiter.
-- LLM receives **metadata only** — never raw packet payloads.
-- Observable values are HTML-escaped in templates to prevent XSS from malicious domain names.
+### PCAP forensics
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/upload` | Upload PCAP, start analysis |
+| GET | `/api/analysis/<id>/status` | Progress polling |
+| GET | `/api/analysis/<id>/summary` | Stats + report preview |
+| GET | `/api/analysis/<id>/findings` | Filterable findings |
+| GET | `/api/analysis/<id>/flows` | Paginated flows |
+| GET | `/api/analysis/<id>/observables` | Enriched IOCs |
+| GET | `/api/analysis/<id>/report.json` | Full report JSON |
+| GET | `/api/analysis/<id>/report.html` | HTML export |
+| GET | `/api/analysis/<id>/stix2.json` | STIX2 bundle |
+| GET | `/api/analysis/<id>/export.csv` | Flows CSV |
+| POST | `/api/analysis/<id>/feedback` | Mark false positive |
+| DELETE | `/api/analysis/<id>` | Delete analysis |
+
+### Live NIDS
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/live/config` | Live monitor context |
+| POST | `/api/live/start` | Start capture + ML (suricata/tcpdump) |
+| POST | `/api/live/stop` | Stop live session |
+| GET | `/api/live/status` | Session stats |
+| GET | `/api/live/alerts` | ML + Suricata alerts (filter by severity/source) |
+| POST | `/api/live/rebind-eve` | Point session at new EVE path |
+| POST | `/api/live/import-eve` | Upload/import external EVE |
+
+### Capture
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/capture/status` | Capture + ML session state |
+| POST | `/api/capture/start` | Start tcpdump or Suricata |
+| POST | `/api/capture/stop` | Stop capture |
+| GET | `/api/capture/export-packets` | Export packet summary |
+| GET | `/api/capture/download-chunks` | Download tcpdump chunks |
+
+### Suricata
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/suricata/status` | Process + EVE path |
+| POST | `/api/suricata/start` | Start Suricata |
+| POST | `/api/suricata/stop` | Stop Suricata |
+| GET/POST | `/api/suricata/rules` | List / save custom rules |
+| GET | `/api/suricata/export` | Export EVE alerts |
+
+### OSINT investigate
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/investigate/finding/<id>` | Run OSINT for finding IPs/domains |
+| GET | `/api/investigate/finding/<id>` | Investigation status |
+| GET | `/api/investigate/target/<analysis_id>/<target>` | On-demand IOC lookup |
+
+### Lab & soak validation
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/lab/start` | Start lab traffic (all 13 patterns default) |
+| POST | `/api/lab/stop` | Stop lab generator |
+| GET | `/api/lab/status` | Lab log + pattern queue |
+| POST | `/api/nids-test/start` | Full soak: capture + ML + lab + coverage |
+| POST | `/api/nids-test/stop` | Stop soak test |
+| GET | `/api/nids-test/status` | Stats + `pattern_coverage` |
+
+### Other
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/chat` | SOC chatbot |
+| GET | `/api/ml/benchmark` | CIC benchmark JSON |
+| GET | `/api/dashboard/overview` | Dashboard KPIs |
+| GET | `/api/health` | Health + API key status |
+| POST | `/api/webhook/test` | Test alert webhook |
 
 ---
 
-**packetEye v1.0** — HackingBay Rwanda | Cybersecurity Division
+## 7. Configuration
+
+Copy `.env.example` → `.env` (never commit `.env`).
+
+### Essential
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `NVIDIA_API_KEY` | — | LLM via NVIDIA NIM (`nvapi-...`) |
+| `LLM_MODEL` | `deepseek-ai/deepseek-v4-pro` | Primary model |
+| `LLM_SECONDARY_MODEL` | `z-ai/glm-5.2` | Ensemble secondary |
+| `LLM_ENSEMBLE_ENABLED` | `true` | Parallel + synthesis |
+| `OPENROUTER_API_KEY` | — | Fallback LLM (optional) |
+| `ML_ANOMALY_THRESHOLD` | `5.0` | Alert threshold (0–10 scale) |
+| `LIVE_MONITOR_ENABLED` | `false` | Enable live NIDS |
+| `SURICATA_EVE_PATH` | — | Path to Suricata `eve.json` |
+
+### OSINT (optional — more keys = richer context)
+
+`VIRUSTOTAL_API_KEY`, `ABUSEIPDB_API_KEY`, `GREYNOISE_API_KEY`, `OTX_API_KEY`, `ANYRUN_API_KEY`, `SHODAN_API_KEY`, `URLSCAN_API_KEY`, `PULSEDIVE_API_KEY`, `IPINFO_TOKEN`
+
+### Live / lab
+
+| Variable | Description |
+|----------|-------------|
+| `CAPTURE_LAB_ENABLED` | Enable Scapy lab traffic generator |
+| `LAB_ROTATE_SEC` | Seconds per attack pattern (default 12) |
+| `ALERT_ENHANCED_ANALYSIS` | OSINT + LLM on live alert emit |
+| `LLM_LIVE_ALERT_SYNTHESIS` | CIC label mapping for live alerts |
+| `AUTO_SYNC_EVE` | Auto-detect external Suricata EVE path |
+| `CAPTURE_MODE` | `suricata` or `tcpdump` |
+| `CAPTURE_INTERFACE` | Mirror/SPAN interface |
+| `ALERT_WEBHOOK_URL` | Discord-compatible webhook |
+
+### Dev mode (no Redis)
+
+```
+CELERY_TASK_ALWAYS_EAGER=true
+CACHE_TYPE=SimpleCache
+```
+
+Full reference: [.env.example](.env.example)
+
+---
+
+## 8. Project Structure
+
+```
+packetEye/
+├── app/
+│   ├── routes/           main.py, api.py, auth.py
+│   ├── models/           Analysis, Flow, Observable, Finding, User
+│   ├── services/
+│   │   ├── pcap_parser.py
+│   │   ├── enrichment/   OSINT clients + orchestrator
+│   │   ├── detection/    rules, ML engine, features, scoring
+│   │   ├── llm/          provider, ensemble, analyst, chat, prompts
+│   │   ├── live/         monitor, alerts, suricata_manager, enricher
+│   │   ├── lab/          traffic_runner, nids_test_runner, patterns
+│   │   ├── capture/      orchestrator, ml_capture, pcap_watcher
+│   │   └── report_builder.py
+│   ├── tasks/            analysis_tasks, live_tasks
+│   ├── templates/        Jinja2 + Bootstrap 5
+│   └── static/           CSS, JS (live_common, live_soc, osint_detail, …)
+├── detection_rules/      YAML rule definitions
+├── deploy/suricata/      suricata.yaml, custom.rules
+├── ml_models/            Trained model artifacts
+├── scripts/              train, evaluate, soak test, migrate
+├── tests/                pytest suite
+├── docs/                 NIDS_SETUP, SURICATA_SETUP
+├── whitelist/            default_whitelist.yaml
+├── .env.example          Config template (GitHub-safe)
+├── run.py                Dev server (port fallback on Windows)
+└── celery_worker.py      Celery worker entry
+```
+
+---
+
+## 9. Training & Scripts
+
+| Script | Purpose |
+|--------|---------|
+| `scripts/train_tracker.py` | Interactive training pipeline (recommended) |
+| `scripts/train_baseline.py` | Quick CIC-IDS2017 BENIGN train |
+| `scripts/tune_threshold.py` | Sweep thresholds, recommend `ML_ANOMALY_THRESHOLD` |
+| `scripts/evaluate_model.py` | CIC benchmark → `benchmark_results.json` |
+| `scripts/verify_nids_setup.py` | Preflight checks |
+| `scripts/migrate_db.py` | DB schema migration |
+| `scripts/generate_test_traffic.py` | 13 CIC-style attack patterns (Scapy) |
+| `scripts/run_nids_soak_test.sh` | Malicious traffic validation soak |
+
+See [docs/NIDS_SETUP.md](docs/NIDS_SETUP.md) for full NIDS workflow.
+
+---
+
+## 10. Security
+
+- **Never commit `.env`** — listed in `.gitignore`; rotate keys if exposed.
+- PCAP files may contain credentials — stored under `data/uploads/` with restricted access.
+- Upload rate limit: 10/hour per IP (Flask-Limiter).
+- LLM and chatbot receive **metadata only** — no raw packet payloads.
+- Observable values HTML-escaped in templates (XSS from malicious domains).
+- Live capture on Linux typically requires root — run only on dedicated sensor hosts.
+
+---
+
+## 11. Documentation
+
+| Document | Contents |
+|----------|----------|
+| [docs/NIDS_SETUP.md](docs/NIDS_SETUP.md) | ML training, live monitor, lab traffic, soak test |
+| [docs/SURICATA_SETUP.md](docs/SURICATA_SETUP.md) | Suricata install, EVE logging, custom rules |
+
+---
+
+## Technology Stack
+
+| Layer | Technology |
+|-------|------------|
+| Backend | Python 3.11+, Flask |
+| Tasks | Celery + Redis (optional in dev) |
+| Database | SQLite (dev) / PostgreSQL (prod) |
+| PCAP | dpkt, Scapy (live/tcpdump) |
+| ML | scikit-learn Isolation Forest |
+| LLM | NVIDIA NIM (DeepSeek V4, GLM 5.2), OpenRouter fallback |
+| Frontend | Bootstrap 5.3, Chart.js, Leaflet |
+| NIDS | Suricata EVE JSON, tcpdump |
+
+---
+
+**packetEye** — HackingBay Rwanda | Cybersecurity Division

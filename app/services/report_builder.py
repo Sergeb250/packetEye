@@ -63,6 +63,9 @@ class ReportBuilder:
                 "whitelisted_flows": whitelisted_count,
                 "unique_external_ips": len(external_ips),
                 "malicious_observables": sum(1 for o in observables if o.is_malicious),
+                "investigated_count": sum(
+                    1 for o in observables if o.enrichment_status == "complete" and (o.enrichment_json or {})
+                ),
                 "findings_by_severity": dict(severity_counts),
             },
             "charts": {

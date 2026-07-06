@@ -117,3 +117,101 @@ class CrtShClient:
             "cert_count": len(data),
             "recent_names": [n for n in names if n][:8],
         }
+
+
+class ShodanApiClient:
+    """Shodan REST API (requires SHODAN_API_KEY)."""
+
+    def __init__(self, api_key: str = ""):
+        self.api_key = api_key
+
+    async def lookup_ip(self, ip: str) -> dict:
+        if not self.api_key:
+            return {}
+        url = f"https://api.shodan.io/shodan/host/{ip}?key={self.api_key}"
+        async with aiohttp.ClientSession(timeout=_TIMEOUT) as session:
+            async with session.get(url) as resp:
+                if resp.status != 200:
+                    return {}
+                data = await resp.json()
+                return {
+                    "org": data.get("org"),
+                    "isp": data.get("isp"),
+                    "ports": (data.get("ports") or [])[:15],
+                    "tags": data.get("tags", [])[:10],
+                    "vulns": list((data.get("vulns") or {}).keys())[:10],
+                }
+
+
+class URLScanClient:
+    def __init__(self, api_key: str = ""):
+        self.api_key = api_key
+
+    async def lookup_domain(self, domain: str) -> dict:
+        if not self.api_key:
+            return {}
+        headers = {"API-Key": self.api_key}
+        url = f"https://urlscan.io/api/v1/search/?q=domain:{domain}"
+        async with aiohttp.ClientSession(timeout=_TIMEOUT) as session:
+            async with session.get(url, headers=headers) as resp:
+                if resp.status != 200:
+                    return {}
+                data = await resp.json()
+                results = data.get("results") or []
+                return {"scan_count": len(results), "recent": [r.get("page", {}).get("url") for r in results[:5]]}
+
+
+class PulsediveClient:
+    def __init__(self, api_key: str = ""):
+        self.api_key = api_key
+
+    async def lookup_ip(self, ip: str) -> dict:
+        if not self.api_key:
+            return {}
+        url = "https://pulsedive.com/api/info.php"
+        params = {"indicator": ip, "key": self.api_key}
+        async with aiohttp.ClientSession(timeout=_TIMEOUT) as session:
+            async with session.get(url, params=params) as resp:
+                if resp.status != 200:
+                    return {}
+                data = await resp.json()
+                return {
+                    "risk": data.get("risk"),
+                    "risk_recommended": data.get("risk_recommended"),
+                    "attributes": (data.get("attributes") or [])[:8],
+                }
+
+
+class IPInfoClient:
+    def __init__(self, token: str = ""):
+        self.token = token
+
+    async def lookup_ip(self, ip: str) -> dict:
+        url = f"https://ipinfo.io/{ip}/json"
+        headers = {"Authorization": f"Bearer {self.token}"} if self.token else {}
+        async with aiohttp.ClientSession(timeout=_TIMEOUT) as session:
+            async with session.get(url, headers=headers) as resp:
+                if resp.status != 200:
+                    return {}
+                data = await resp.json()
+                return {
+                    "org": data.get("org"),
+                    "hostname": data.get("hostname"),
+                    "city": data.get("city"),
+                    "country": data.get("country"),
+                }
+
+
+class ThreatFoxClient:
+    """abuse.ch ThreatFox — public IOC lookup."""
+
+    async def lookup_ip(self, ip: str) -> dict:
+        url = "https://threatfox-api.abuse.ch/api/v1/"
+        payload = {"query": "search_ioc", "search_term": ip}
+        async with aiohttp.ClientSession(timeout=_TIMEOUT) as session:
+            async with session.post(url, json=payload) as resp:
+                if resp.status != 200:
+                    return {}
+                data = await resp.json()
+                iocs = data.get("data") or []
+                return {"ioc_count": len(iocs), "malware": list({i.get("malware") for i in iocs if i.get("malware")})[:5]}

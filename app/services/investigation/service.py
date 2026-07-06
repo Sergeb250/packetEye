@@ -24,11 +24,9 @@ MAX_TARGETS_PER_INVESTIGATION = 6
 
 
 def _is_public_ip(value: str) -> bool:
-    try:
-        ip = ipaddress.ip_address(str(value))
-        return not (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved)
-    except ValueError:
-        return False
+    from app.services.net_utils import is_external_ip
+
+    return is_external_ip(value)
 
 
 def _looks_like_domain(value: str) -> bool:
@@ -98,9 +96,10 @@ class InvestigationService:
             enrichment = await self._lookup(target)
             entry = {"type": target["type"], "results": enrichment}
             if "skipped" not in enrichment:
-                is_malicious, confidence = self.orchestrator._compute_verdict(enrichment)
+                is_malicious, confidence, breakdown = self.orchestrator._compute_verdict(enrichment)
                 entry["is_malicious"] = is_malicious
                 entry["confidence"] = round(confidence, 2)
+                entry["verdict_breakdown"] = breakdown
             results[target["value"]] = entry
         return results
 
@@ -233,5 +232,142 @@ def get_investigation(finding_id: str) -> dict:
         "finding_id": finding_id,
         "title": finding.title,
         "severity": finding.severity,
+        "analysis_id": finding.analysis_id,
         "investigation": investigation or {"status": "none"},
     }
+
+
+def investigate_target_sync(config: dict, analysis_id: str, target_type: str, value: str) -> dict:
+    """Lookup a single IP/domain with full OSINT payloads."""
+    service = InvestigationService(config)
+    if target_type == "ip" and not _is_public_ip(value):
+        return {
+            "ok": True,
+            "type": target_type,
+            "value": value,
+            "skipped": "private address — no OSINT lookup",
+        }
+    try:
+        result = asyncio.run(service.orchestrator.lookup_target(target_type, value))
+    except Exception as exc:
+        logger.exception("Target lookup failed for %s", value)
+        return {"ok": False, "error": str(exc)}
+    return {"ok": True, **result}
+
+
+def refresh_analysis_metrics(analysis_id: str) -> dict:
+    """Live metrics from DB (not frozen report snapshot)."""
+    from app.models.analysis import Analysis, Finding, Flow, Observable
+    from app.services.detection.scoring import compute_analysis_risk_score
+
+    analysis = Analysis.query.get(analysis_id)
+    if not analysis:
+        return {"ok": False, "error": "Analysis not found"}
+    findings = Finding.query.filter_by(analysis_id=analysis_id, is_false_positive=False).all()
+    observables = Observable.query.filter_by(analysis_id=analysis_id).all()
+    flows = Flow.query.filter_by(analysis_id=analysis_id).count()
+    investigated = sum(1 for o in observables if (o.enrichment_json or {}) and o.enrichment_status == "complete")
+    malicious = sum(1 for o in observables if o.is_malicious)
+    external_ips = set()
+    for f in Flow.query.filter_by(analysis_id=analysis_id).all():
+        if f.dst_ip and _is_public_ip(f.dst_ip):
+            external_ips.add(f.dst_ip)
+    risk = compute_analysis_risk_score(findings)
+    return {
+        "ok": True,
+        "analysis_id": analysis_id,
+        "risk_score": risk,
+        "detection_risk": risk,
+        "malicious_observables": malicious,
+        "confirmed_malicious_iocs": malicious,
+        "investigated_count": investigated,
+        "finding_count": len(findings),
+        "total_flows": flows,
+        "unique_external_ips": len(external_ips),
+    }
+
+
+def investigate_flow_sync(config: dict, flow_id: str) -> dict:
+    """Investigate IPs/domains from a flow row."""
+    from app.models.analysis import Flow
+
+    flow = Flow.query.get(flow_id)
+    if not flow:
+        return {"ok": False, "error": "Flow not found"}
+
+    targets: list[dict] = []
+    seen: set[str] = set()
+
+    def add(kind: str, val) -> None:
+        v = str(val or "").strip()
+        if not v or v in seen or len(targets) >= MAX_TARGETS_PER_INVESTIGATION:
+            return
+        if kind == "ip" and not _is_ip(v):
+            return
+        if kind == "domain" and not _looks_like_domain(v):
+            return
+        seen.add(v)
+        targets.append({"type": kind, "value": v, "public": _is_public_ip(v) if kind == "ip" else True})
+
+    add("ip", flow.src_ip)
+    add("ip", flow.dst_ip)
+    add("domain", flow.tls_sni)
+    for q in (flow.dns_queries or [])[:2]:
+        add("domain", q)
+
+    inv_key = "investigation"
+    meta = dict(flow.enrichment_json or {})
+    if not targets:
+        meta[inv_key] = {
+            "status": "complete",
+            "at": datetime.now(timezone.utc).isoformat(),
+            "targets": {},
+            "note": "No public IPs or domains on this flow.",
+        }
+        flow.enrichment_json = meta
+        db.session.commit()
+        return {"ok": True, "flow_id": flow_id, "investigation": meta[inv_key]}
+
+    meta[inv_key] = {"status": "running", "at": datetime.now(timezone.utc).isoformat(), "targets": {}}
+    flow.enrichment_json = meta
+    db.session.commit()
+
+    try:
+        service = InvestigationService(config)
+        results = service.run(targets)
+    except Exception as exc:
+        meta = dict(flow.enrichment_json or {})
+        meta[inv_key] = {"status": "failed", "at": datetime.now(timezone.utc).isoformat(), "error": str(exc)}
+        flow.enrichment_json = meta
+        db.session.commit()
+        return {"ok": False, "error": str(exc)}
+
+    malicious = [v for v in results.values() if v.get("is_malicious")]
+    meta = dict(flow.enrichment_json or {})
+    meta[inv_key] = {
+        "status": "complete",
+        "at": datetime.now(timezone.utc).isoformat(),
+        "targets": results,
+        "malicious_count": len(malicious),
+    }
+    flow.enrichment_json = meta
+    db.session.commit()
+
+    from types import SimpleNamespace
+
+    try:
+        _sync_observables(SimpleNamespace(analysis_id=flow.analysis_id), results)
+    except Exception:
+        logger.exception("Flow observable sync failed for %s", flow_id)
+
+    return {"ok": True, "flow_id": flow_id, "investigation": meta[inv_key]}
+
+
+def get_flow_investigation(flow_id: str) -> dict:
+    from app.models.analysis import Flow
+
+    flow = Flow.query.get(flow_id)
+    if not flow:
+        return {"ok": False, "error": "Flow not found"}
+    inv = (flow.enrichment_json or {}).get("investigation") or {"status": "none"}
+    return {"ok": True, "flow_id": flow_id, "analysis_id": flow.analysis_id, "investigation": inv}

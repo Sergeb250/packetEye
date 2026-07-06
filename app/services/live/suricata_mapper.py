@@ -1,8 +1,9 @@
 """Map Suricata EVE flow events to packetEye flow dicts."""
 
-import ipaddress
 import logging
 from datetime import datetime, timezone
+
+from app.services.net_utils import is_external_ip
 
 logger = logging.getLogger(__name__)
 
@@ -18,14 +19,6 @@ def _parse_ts(value) -> datetime | None:
         return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
     except (ValueError, TypeError):
         return None
-
-
-def _is_private_ip(ip_str: str) -> bool:
-    try:
-        ip = ipaddress.ip_address(str(ip_str))
-        return ip.is_private or ip.is_loopback or ip.is_link_local
-    except ValueError:
-        return False
 
 
 def eve_flow_to_flow_dict(eve_event: dict, flow_id: str | None = None) -> dict | None:
@@ -66,7 +59,7 @@ def eve_flow_to_flow_dict(eve_event: dict, flow_id: str | None = None) -> dict |
         "iat_std": 0.0,
         "iat_max": 0.0,
         "fwd_iat_mean": 0.0,
-        "is_external_dst": not _is_private_ip(dst_ip),
+        "is_external_dst": is_external_ip(dst_ip),
     }
 
 

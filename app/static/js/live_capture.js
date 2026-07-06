@@ -82,6 +82,8 @@
         const tr = document.createElement('tr');
         tr.className = severityClass(row.severity);
         tr.dataset.id = row.id;
+        tr.style.cursor = 'pointer';
+        tr.title = 'Click for details';
         tr.innerHTML = `
             <td class="text-muted">${row.id}</td>
             <td class="font-monospace small">${fmtTime(row.timestamp)}</td>
@@ -93,6 +95,12 @@
             <td>${severityBadge(row.severity)}</td>
         `;
         body.appendChild(tr);
+        tr.addEventListener('click', () => {
+            if (typeof window.socShowEventDetail === 'function') {
+                window.socShowEventDetail(row);
+                if (window.livePage !== 'overview') window.location.href = '/live/overview';
+            }
+        });
         rowCount += 1;
 
         while (body.rows.length > MAX_ROWS) {

@@ -31,18 +31,26 @@ function renderInvestigationInline(container, inv) {
             return `<div><code>${escInv(k)}</code> — <span class="text-muted">${escInv(t.results.skipped)}</span></div>`;
         }
         const badge = t.is_malicious
-            ? '<span class="badge bg-danger">malicious</span>'
-            : '<span class="badge bg-success">clean</span>';
-        return `<div class="mb-2"><code>${escInv(k)}</code> ${badge}
+            ? '<span class="badge bg-danger">TI Verdict: Malicious</span>'
+            : '<span class="badge bg-success">TI Verdict: Clean</span>';
+        const detailBtn = `<button type="button" class="btn btn-link btn-sm p-0 ms-1 btn-osint-inv-detail" data-target-key="${escInv(k)}">Open detail</button>`;
+        return `<div class="mb-2"><code>${escInv(k)}</code> ${badge} ${detailBtn}
             <div class="text-muted">${window.osintSummaryLines(t.results || {}).map(escInv).join('<br>')}</div></div>`;
     }).join('');
+
+    container.querySelectorAll('.btn-osint-inv-detail').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            if (window.openOsintFromInvestigation) {
+                window.openOsintFromInvestigation(inv, btn.dataset.targetKey);
+            }
+        });
+    });
 }
 
-/* One line per OSINT provider that returned data. Shared with the live page. */
 window.osintSummaryLines = function (r) {
     const lines = [];
     const vt = r.virustotal;
-    if (vt && vt.malicious != null) lines.push(`VirusTotal: ${vt.malicious} malicious / ${vt.suspicious || 0} suspicious engines`);
+    if (vt && vt.malicious != null) lines.push(`VT: ${vt.malicious} malicious / ${vt.suspicious || 0} suspicious engines`);
     const abuse = r.abuseipdb;
     if (abuse && abuse.abuseConfidenceScore != null) lines.push(`AbuseIPDB: ${abuse.abuseConfidenceScore}% abuse confidence`);
     const gn = r.greynoise;
@@ -52,6 +60,10 @@ window.osintSummaryLines = function (r) {
     const otx = r.otx;
     if (otx && otx.pulse_count != null) {
         lines.push(`OTX: in ${otx.pulse_count} threat pulses${otx.pulses?.length ? ` (e.g. ${otx.pulses[0]})` : ''}`);
+    }
+    const anyrun = r.anyrun;
+    if (anyrun && anyrun.verdict) {
+        lines.push(`ANY.RUN: ${anyrun.verdict}${anyrun.task_count ? ` (${anyrun.task_count} sandbox tasks)` : ''}`);
     }
     const idb = r.internetdb;
     if (idb && (idb.ports?.length || idb.vulns?.length)) {
@@ -92,10 +104,22 @@ document.querySelectorAll('.btn-investigate').forEach((btn) => {
                     if (['complete', 'failed'].includes(data.investigation?.status) || tries > 20) {
                         clearInterval(poll);
                         btn.disabled = false;
+                        if (data.investigation?.status === 'complete' && typeof analysisId !== 'undefined') {
+                            fetch(`/api/analysis/${analysisId}/refresh-report`, { method: 'POST' }).catch(() => {});
+                            if (window.refreshReportMetrics) window.refreshReportMetrics();
+                        }
                     }
                 }
             } catch { /* retry */ }
             if (tries > 20) { clearInterval(poll); btn.disabled = false; }
         }, 1500);
+    });
+});
+
+document.querySelectorAll('.btn-osint-detail').forEach((btn) => {
+    btn.addEventListener('click', () => {
+        const target = btn.dataset.target;
+        const aid = btn.dataset.analysisId || (typeof analysisId !== 'undefined' ? analysisId : '');
+        if (window.openOsintForTarget && aid) window.openOsintForTarget(aid, target);
     });
 });

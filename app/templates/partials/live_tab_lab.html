@@ -1,0 +1,118 @@
+<div class="card">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-bug text-info"></i> Lab Traffic Generator</span>
+        <span class="badge bg-secondary" id="labStatusBadge">idle</span>
+    </div>
+    <div class="card-body">
+        <p class="small text-muted mb-3">
+            CIC-IDS2017-style attack patterns for ML/Suricata/tcpdump testing.
+            Requires <code>CAPTURE_LAB_ENABLED=true</code> and root/capabilities.
+            Default soak test rotates all 13 patterns — use Lab tab or CLI soak script.
+        </p>
+        <div class="row g-3">
+            <div class="col-lg-7">
+                <label class="form-label">Attack patterns (12+ CIC-IDS2017-style)</label>
+                <div class="row row-cols-1 row-cols-sm-2 g-1 small">
+                    <div class="col"><div class="form-check"><input class="form-check-input lab-pat" type="checkbox" value="portscan" id="labPatPortscan" checked><label class="form-check-label" for="labPatPortscan">PortScan</label></div></div>
+                    <div class="col"><div class="form-check"><input class="form-check-input lab-pat" type="checkbox" value="bot" id="labPatBot" checked><label class="form-check-label" for="labPatBot">Bot / C2 beacon</label></div></div>
+                    <div class="col"><div class="form-check"><input class="form-check-input lab-pat" type="checkbox" value="ddos" id="labPatDdos" checked><label class="form-check-label" for="labPatDdos">DDoS flood</label></div></div>
+                    <div class="col"><div class="form-check"><input class="form-check-input lab-pat" type="checkbox" value="dos_goldeneye" id="labPatGoldeneye" checked><label class="form-check-label" for="labPatGoldeneye">DoS GoldenEye</label></div></div>
+                    <div class="col"><div class="form-check"><input class="form-check-input lab-pat" type="checkbox" value="dos_hulk" id="labPatHulk" checked><label class="form-check-label" for="labPatHulk">DoS Hulk</label></div></div>
+                    <div class="col"><div class="form-check"><input class="form-check-input lab-pat" type="checkbox" value="dos_slowhttptest" id="labPatSlowhttp" checked><label class="form-check-label" for="labPatSlowhttp">DoS SlowHTTPTest</label></div></div>
+                    <div class="col"><div class="form-check"><input class="form-check-input lab-pat" type="checkbox" value="dos_slowloris" id="labPatSlowloris" checked><label class="form-check-label" for="labPatSlowloris">DoS slowloris</label></div></div>
+                    <div class="col"><div class="form-check"><input class="form-check-input lab-pat" type="checkbox" value="ftp_patator" id="labPatFtp" checked><label class="form-check-label" for="labPatFtp">FTP-Patator</label></div></div>
+                    <div class="col"><div class="form-check"><input class="form-check-input lab-pat" type="checkbox" value="ssh_patator" id="labPatSsh" checked><label class="form-check-label" for="labPatSsh">SSH-Patator</label></div></div>
+                    <div class="col"><div class="form-check"><input class="form-check-input lab-pat" type="checkbox" value="web_brute" id="labPatWeb" checked><label class="form-check-label" for="labPatWeb">Web brute force</label></div></div>
+                    <div class="col"><div class="form-check"><input class="form-check-input lab-pat" type="checkbox" value="dns" id="labPatDns" checked><label class="form-check-label" for="labPatDns">DNS tunnel-like</label></div></div>
+                    <div class="col"><div class="form-check"><input class="form-check-input lab-pat" type="checkbox" value="infiltration" id="labPatInfil" checked><label class="form-check-label" for="labPatInfil">Infiltration exfil</label></div></div>
+                    <div class="col"><div class="form-check"><input class="form-check-input lab-pat" type="checkbox" value="arp" id="labPatArp"><label class="form-check-label" for="labPatArp">ARP activity</label></div></div>
+                </div>
+            </div>
+            <div class="col-lg-5">
+                <label class="form-label" for="labIface">Interface</label>
+                <input type="text" class="form-control form-control-sm" id="labIface" placeholder="{{ live.capture_interface or 'eth0' }}">
+                <button type="button" class="btn btn-primary btn-sm mt-3" id="opsBtnLabToggle">
+                    <i class="bi bi-play-fill"></i> Start lab traffic
+                </button>
+                <p class="small text-muted mt-2 mb-0">Patterns rotate every ~8s until stopped. Watch ML alerts on Overview / ML tabs.</p>
+            </div>
+        </div>
+        <div class="table-responsive mt-3">
+            <table class="table table-sm table-hover mb-0" id="labAttackTable">
+                <thead class="table-light">
+                    <tr>
+                        <th>Pattern</th>
+                        <th>CIC label</th>
+                        <th>Status</th>
+                        <th>Duration</th>
+                    </tr>
+                </thead>
+                <tbody id="labAttackBody">
+                    <tr><td colspan="4" class="text-muted small">Start lab traffic to see active attacks.</td></tr>
+                </tbody>
+            </table>
+        </div>
+        <pre id="labLog" class="small bg-light p-2 mt-3 mb-0 font-monospace" style="max-height:180px;overflow:auto">Ready.</pre>
+    </div>
+</div>
+
+<div class="card mt-3">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-shield-check text-success"></i> NIDS + ML Soak Test</span>
+        <span class="badge bg-secondary" id="nidsTestBadge">idle</span>
+    </div>
+    <div class="card-body">
+        <p class="small text-muted mb-3">
+            End-to-end validation: rotates all 13 CIC-style attack patterns, drives capture + ML, tracks which patterns triggered alerts.
+            CLI: <code>./scripts/run_nids_soak_test.sh --interface eth0</code>
+        </p>
+        <div class="row g-3 align-items-end">
+            <div class="col-md-3">
+                <label class="form-label" for="nidsTestMode">Capture mode</label>
+                <select class="form-select form-select-sm" id="nidsTestMode">
+                    <option value="suricata">Suricata (EVE)</option>
+                    <option value="tcpdump">tcpdump + Scapy ML</option>
+                </select>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label" for="nidsTestIface">Interface</label>
+                <input type="text" class="form-control form-control-sm" id="nidsTestIface" placeholder="{{ live.capture_interface or 'eth0' }}">
+            </div>
+            <div class="col-md-4">
+                <div class="form-check mt-4">
+                    <input class="form-check-input" type="checkbox" id="nidsTestWithLab" checked>
+                    <label class="form-check-label" for="nidsTestWithLab">Include lab attack traffic (<code>CAPTURE_LAB_ENABLED</code>)</label>
+                </div>
+            </div>
+            <div class="col-md-2">
+                <button type="button" class="btn btn-success btn-sm w-100" id="opsBtnNidsTestToggle">
+                    <i class="bi bi-play-fill"></i> Start soak test
+                </button>
+            </div>
+        </div>
+        <div class="row g-2 mt-2 small" id="nidsTestStats">
+            <div class="col-auto"><span class="text-muted">Flows:</span> <strong id="nidsTestFlows">—</strong></div>
+            <div class="col-auto"><span class="text-muted">Findings:</span> <strong id="nidsTestFindings">—</strong></div>
+            <div class="col-auto"><span class="text-muted">ML alerts:</span> <strong id="nidsTestMl">—</strong></div>
+            <div class="col-auto"><span class="text-muted">Suricata:</span> <strong id="nidsTestSuri">—</strong></div>
+            <div class="col-auto"><span class="text-muted">Elapsed:</span> <strong id="nidsTestElapsed">—</strong></div>
+        </div>
+        <div class="table-responsive mt-3">
+            <table class="table table-sm table-hover mb-0" id="nidsTestCoverageTable">
+                <thead class="table-light">
+                    <tr>
+                        <th>Pattern</th>
+                        <th>CIC label</th>
+                        <th>ML alert</th>
+                        <th>Suricata</th>
+                        <th>Done</th>
+                    </tr>
+                </thead>
+                <tbody id="nidsTestCoverageBody">
+                    <tr><td colspan="5" class="text-muted small">Start soak test to track all 13 attack patterns.</td></tr>
+                </tbody>
+            </table>
+        </div>
+        <pre id="nidsTestLog" class="small bg-light p-2 mt-3 mb-0 font-monospace" style="max-height:160px;overflow:auto">Ready — runs until you stop it.</pre>
+    </div>
+</div>

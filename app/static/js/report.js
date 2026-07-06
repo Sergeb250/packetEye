@@ -7,6 +7,26 @@ async function markFP(findingId) {
     alert('Marked as false positive');
 }
 
+window.refreshReportMetrics = async function () {
+    if (typeof analysisId === 'undefined') return;
+    try {
+        const res = await fetch(`/api/analysis/${analysisId}/metrics`);
+        if (!res.ok) return;
+        const m = await res.json();
+        const riskEl = document.getElementById('liveRiskScore');
+        if (riskEl) riskEl.textContent = Number(m.detection_risk || m.risk_score || 0).toFixed(1);
+        const set = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text; };
+        set('metricMaliciousIocs', `${m.confirmed_malicious_iocs ?? m.malicious_observables ?? 0} confirmed IOCs`);
+        set('metricInvestigated', `${m.investigated_count ?? 0} investigated`);
+        set('metricFlows', `${m.total_flows ?? 0} flows`);
+        set('metricExternalIps', `${m.unique_external_ips ?? 0} external IPs`);
+    } catch { /* ignore */ }
+};
+
+(async () => {
+    if (typeof analysisId !== 'undefined') await window.refreshReportMetrics();
+})();
+
 // Threat map: merge markers baked into the report with live observable geo
 // (investigations run after the report was built still show up).
 (async () => {

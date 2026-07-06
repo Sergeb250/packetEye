@@ -14,6 +14,7 @@ from app.models.analysis import Finding, Flow, Observable
 from app.services.detection.ml_engine import MLEngine
 from app.services.detection.rules import load_rules
 from app.services.detection.scoring import compute_hybrid_flow_severity, severity_to_score
+from app.services.net_utils import is_internal_ip, ml_alert_suppressed
 
 logger = logging.getLogger(__name__)
 
@@ -154,20 +155,35 @@ class DetectionEngine:
             if flow:
                 flow.anomaly_score = result["anomaly_score"]
             if result["flagged"]:
+                flow_dict = flow.to_dict() if flow else {}
+                if flow_dict.get("id") is None and flow:
+                    flow_dict["id"] = flow.id
+                suppressed, _ = ml_alert_suppressed(flow_dict, self.whitelist)
+                if suppressed:
+                    continue
                 findings.append(
                     Finding(
                         analysis_id=analysis_id,
                         flow_id=result["flow_id"],
                         rule_id="ML-ANOMALY-001",
                         source="ml",
-                        title="ML Anomaly — outlier flow detected",
+                        title="ML Anomaly — outlier flow to external host",
                         description=result["explanation"],
                         severity="medium",
                         severity_score=result["anomaly_score"],
-                        evidence={"anomaly_score": result["anomaly_score"], "explanation": result["explanation"]},
+                        evidence={
+                            "anomaly_score": result["anomaly_score"],
+                            "explanation": result["explanation"],
+                            **{
+                                k: flow_dict.get(k)
+                                for k in ("src_ip", "dst_ip", "src_port", "dst_port", "protocol")
+                            },
+                        },
                         mitre_tactic="TA0011 - Command and Control",
                         mitre_technique="T1071 - Application Layer Protocol",
-                        recommendation="Investigate this flow's destination, timing, and payload characteristics.",
+                        recommendation=(
+                            "Investigate this flow's external destination, timing, and payload characteristics."
+                        ),
                     )
                 )
 
@@ -524,10 +540,7 @@ class DetectionEngine:
 
     @staticmethod
     def _is_private(ip: str) -> bool:
-        try:
-            return ipaddress.ip_address(ip).is_private
-        except ValueError:
-            return False
+        return is_internal_ip(ip)
 
     @staticmethod
     def _shannon_entropy(s: str) -> float:

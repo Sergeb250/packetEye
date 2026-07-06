@@ -10,6 +10,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from app.services.net_utils import is_internal_ip
+
 logger = logging.getLogger(__name__)
 
 _SUSPICIOUS_PORTS = frozenset({22, 23, 445, 1433, 3389, 4444, 5900, 6667, 31337})
@@ -27,23 +29,13 @@ def _parse_ts(value) -> float:
         return time.time()
 
 
-def _is_private_ip(ip_str: str) -> bool:
-    try:
-        import ipaddress
-
-        ip = ipaddress.ip_address(str(ip_str))
-        return ip.is_private or ip.is_loopback or ip.is_link_local
-    except ValueError:
-        return False
-
-
 def _classify_heuristic(src_ip: str, dst_ip: str, dst_port: int, proto: str, info: str = "") -> str:
     del src_ip
     if dst_port in _HIGH_RISK_PORTS:
         return "critical"
-    if not _is_private_ip(dst_ip) and dst_port in _SUSPICIOUS_PORTS:
+    if not is_internal_ip(dst_ip) and dst_port in _SUSPICIOUS_PORTS:
         return "high"
-    if not _is_private_ip(dst_ip) and proto in ("TCP", "UDP"):
+    if not is_internal_ip(dst_ip) and proto in ("TCP", "UDP"):
         return "medium"
     lower = info.lower()
     if any(x in lower for x in ("scan", "brute", "exploit", "malware", "attack")):
@@ -52,7 +44,7 @@ def _classify_heuristic(src_ip: str, dst_ip: str, dst_port: int, proto: str, inf
 
 
 def eve_event_to_row(event: dict) -> dict | None:
-    """Map a Suricata EVE event to a Wireshark-style display row."""
+    """Map a Suricata EVE event to a Wireshark-style display row with full metadata."""
     etype = event.get("event_type") or "unknown"
     ts = _parse_ts(event.get("timestamp"))
     src_ip = str(event.get("src_ip") or "")
@@ -60,52 +52,77 @@ def eve_event_to_row(event: dict) -> dict | None:
     src_port = int(event.get("src_port") or 0)
     dst_port = int(event.get("dest_port") or event.get("dst_port") or 0)
     proto = str(event.get("proto") or "—").upper()
+    flow_id = event.get("flow_id")
+    in_iface = event.get("in_iface") or ""
+    pcap_cnt = event.get("pcap_cnt")
+    app_proto = event.get("app_proto") or ""
+    alert_obj = event.get("alert") or {}
+    flow_obj = event.get("flow") or {}
+    http_obj = event.get("http") or {}
+    tls_obj = event.get("tls") or {}
+    dns_obj = event.get("dns") or {}
+
+    extra = {
+        "flow_id": flow_id,
+        "in_iface": in_iface,
+        "pcap_cnt": pcap_cnt,
+        "app_proto": app_proto,
+        "action": alert_obj.get("action") or event.get("action"),
+        "signature_id": alert_obj.get("signature_id") or alert_obj.get("sid"),
+        "category": alert_obj.get("category"),
+        "alert": alert_obj if alert_obj else None,
+        "flow": flow_obj if flow_obj else None,
+        "http": http_obj if http_obj else None,
+        "tls": tls_obj if tls_obj else None,
+        "dns": dns_obj if dns_obj else None,
+        "raw_event": event,
+    }
 
     if etype == "alert":
-        alert = event.get("alert") or {}
         sev_map = {1: "critical", 2: "high", 3: "medium"}
-        severity = sev_map.get(alert.get("severity"), "high")
-        info = str(alert.get("signature") or "Suricata alert")
+        severity = sev_map.get(alert_obj.get("severity"), "high")
+        info = str(alert_obj.get("signature") or "Suricata alert")
         length = int(event.get("pkt_len") or 0)
-        return _row(ts, src_ip, dst_ip, src_port, dst_port, proto, length, info, severity, "alert", "suricata")
+        return _row(ts, src_ip, dst_ip, src_port, dst_port, proto, length, info, severity, "alert", "suricata", extra)
 
     if etype == "flow":
-        flow = event.get("flow") or {}
-        bytes_total = int(flow.get("bytes_toserver") or 0) + int(flow.get("bytes_toclient") or 0)
-        pkts = int(flow.get("pkts_toserver") or 0) + int(flow.get("pkts_toclient") or 0)
-        app = event.get("app_proto") or flow.get("state") or ""
+        bytes_total = int(flow_obj.get("bytes_toserver") or 0) + int(flow_obj.get("bytes_toclient") or 0)
+        pkts = int(flow_obj.get("pkts_toserver") or 0) + int(flow_obj.get("pkts_toclient") or 0)
+        app = app_proto or flow_obj.get("state") or ""
         info = f"Flow end · {pkts} pkts · {bytes_total} B"
         if app:
             info += f" · {app}"
         severity = _classify_heuristic(src_ip, dst_ip, dst_port, proto, info)
-        return _row(ts, src_ip, dst_ip, src_port, dst_port, proto, bytes_total, info, severity, "flow", "suricata")
+        return _row(ts, src_ip, dst_ip, src_port, dst_port, proto, bytes_total, info, severity, "flow", "suricata", extra)
 
     if etype == "dns":
-        dns = event.get("dns") or {}
-        q = str(dns.get("rrname") or dns.get("type") or "DNS")
-        info = f"DNS {dns.get('type', 'query')}: {q}"
+        q = str(dns_obj.get("rrname") or dns_obj.get("type") or "DNS")
+        info = f"DNS {dns_obj.get('type', 'query')}: {q}"
         severity = "medium" if not q.endswith((".local", ".arpa")) else "info"
-        return _row(ts, src_ip, dst_ip, src_port, dst_port, "DNS", 0, info, severity, "dns", "suricata")
+        return _row(ts, src_ip, dst_ip, src_port, dst_port, "DNS", 0, info, severity, "dns", "suricata", extra)
 
     if etype == "http":
-        http = event.get("http") or {}
-        hostname = http.get("hostname") or ""
-        method = http.get("http_method") or http.get("method") or "HTTP"
-        url = http.get("url") or ""
+        hostname = http_obj.get("hostname") or ""
+        method = http_obj.get("http_method") or http_obj.get("method") or "HTTP"
+        url = http_obj.get("url") or ""
         info = f"{method} {hostname}{url}".strip()
         severity = _classify_heuristic(src_ip, dst_ip, dst_port, "TCP", info)
-        return _row(ts, src_ip, dst_ip, src_port, dst_port, "HTTP", 0, info[:120], severity, "http", "suricata")
+        return _row(ts, src_ip, dst_ip, src_port, dst_port, "HTTP", 0, info[:120], severity, "http", "suricata", extra)
 
     if etype == "tls":
-        tls = event.get("tls") or {}
-        sni = tls.get("sni") or tls.get("subject") or "TLS handshake"
+        sni = tls_obj.get("sni") or tls_obj.get("subject") or "TLS handshake"
         info = f"TLS · {sni}"
-        severity = "medium" if not _is_private_ip(dst_ip) else "info"
-        return _row(ts, src_ip, dst_ip, src_port, dst_port, "TLS", 0, str(sni)[:120], severity, "tls", "suricata")
+        severity = "medium" if not is_internal_ip(dst_ip) else "info"
+        return _row(ts, src_ip, dst_ip, src_port, dst_port, "TLS", 0, str(sni)[:120], severity, "tls", "suricata", extra)
 
-    if etype in ("anomaly", "drop"):
-        info = f"{etype}: {event.get('app_proto') or event.get('reason') or ''}".strip()
-        return _row(ts, src_ip, dst_ip, src_port, dst_port, proto, 0, info[:120], "medium", etype, "suricata")
+    if etype in ("anomaly", "drop", "ssh", "smtp", "ftp", "fileinfo", "stats"):
+        info = f"{etype}: {app_proto or event.get('reason') or event.get('app_proto') or ''}".strip()
+        severity = "medium" if etype in ("anomaly", "drop") else "info"
+        return _row(ts, src_ip, dst_ip, src_port, dst_port, proto, 0, info[:120], severity, etype, "suricata", extra)
+
+    if src_ip or dst_ip:
+        info = f"{etype} event"
+        return _row(ts, src_ip, dst_ip, src_port, dst_port, proto, 0, info, "info", etype, "suricata", extra)
 
     return None
 
@@ -180,8 +197,9 @@ def _row(
     severity: str,
     event_type: str,
     source: str,
+    extra: dict | None = None,
 ) -> dict[str, Any]:
-    return {
+    row = {
         "timestamp": ts,
         "src_ip": src_ip,
         "dst_ip": dst_ip,
@@ -194,6 +212,9 @@ def _row(
         "event_type": event_type,
         "source": source,
     }
+    if extra:
+        row.update({k: v for k, v in extra.items() if v is not None})
+    return row
 
 
 class LivePacketFeed:
@@ -337,12 +358,20 @@ class LivePacketFeed:
         with self._lock:
             self._buffer.clear()
 
+    def rebind_eve(self, eve_path: str) -> None:
+        if self._consumer:
+            self._consumer.rebind(eve_path)
+
 
 _feed = LivePacketFeed()
 
 
 def start_feed(config: dict, mode: str, interface: str, eve_path: str | None = None) -> None:
     _feed.start(config, mode, interface, eve_path=eve_path)
+
+
+def rebind_eve(eve_path: str) -> None:
+    _feed.rebind_eve(eve_path)
 
 
 def stop_feed() -> None:

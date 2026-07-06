@@ -1,12 +1,3 @@
-{% extends "base.html" %}
-{% block title %}Suricata & Rules{% endblock %}
-{% block content %}
-<div class="dashboard-hero mb-4">
-    <h2 class="mb-1"><i class="bi bi-shield-shaded text-info"></i> Suricata Management</h2>
-    <p class="text-muted mb-0 small">Start Suricata, view parsed diagnostics, monitor EVE events, and edit custom rules.</p>
-</div>
-{% include "partials/live_nav.html" %}
-
 <div class="card">
     <div class="card-header d-flex justify-content-between align-items-center">
         <span>Process status</span>
@@ -17,10 +8,9 @@
     </div>
     <div class="card-body">
         <div class="alert alert-info small mb-3">
-            <strong>Tip:</strong> Do not use <code>lo</code> (loopback) on Kali — pick <code>eth0</code>, <code>wlan0</code>, or your active NIC.
+            <strong>Tip:</strong> Do not use <code>lo</code> on Kali — pick <code>eth0</code>, <code>wlan0</code>, or your active NIC.
             Run packetEye as <code>sudo</code> or grant capabilities:
             <code>sudo setcap cap_net_raw,cap_net_admin=eip $(which suricata)</code>.
-            Suricata uses a runtime config at <code>data/suricata/packeteye-runtime.yaml</code> (includes <code>-c</code>).
         </div>
         <div class="row g-2 small mb-3">
             <div class="col-6 col-md-3"><div class="text-muted">Installed</div><div id="surInstalled" class="fw-semibold">—</div></div>
@@ -46,7 +36,7 @@
             <span>Custom rules (<code id="surRulesPath">custom.rules</code>)</span>
             <span id="surRulesStatus" class="text-muted"></span>
         </label>
-        <textarea id="surRules" class="form-control font-monospace" rows="10" spellcheck="false"></textarea>
+        <textarea id="surRules" class="form-control font-monospace" rows="8" spellcheck="false"></textarea>
         <div class="d-flex gap-2 mt-2">
             <button id="btnRulesSave" class="btn btn-outline-warning btn-sm" type="button"><i class="bi bi-save"></i> Save &amp; reload</button>
             <button id="btnRulesReload" class="btn btn-outline-secondary btn-sm" type="button"><i class="bi bi-arrow-clockwise"></i> Revert</button>
@@ -56,7 +46,7 @@
 
 <div class="card mt-4">
     <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-2">
-        <span><i class="bi bi-terminal text-info"></i> Diagnostics <span class="text-muted small fw-normal">— parsed startup / preflight output</span></span>
+        <span><i class="bi bi-terminal text-info"></i> Diagnostics</span>
         <div class="d-flex align-items-center gap-2">
             <span class="small text-muted" id="surDiagCount">0 rows</span>
             <button type="button" id="btnSurDiagRefresh" class="btn btn-outline-secondary btn-sm"><i class="bi bi-arrow-clockwise"></i></button>
@@ -66,15 +56,10 @@
         <div id="surDiagWrap" class="suricata-table-wrap">
             <table class="table table-sm table-hover suricata-diag-table mb-0">
                 <thead class="sticky-top">
-                    <tr>
-                        <th>#</th>
-                        <th>Severity</th>
-                        <th>Category</th>
-                        <th>Message</th>
-                    </tr>
+                    <tr><th>#</th><th>Severity</th><th>Category</th><th>Message</th></tr>
                 </thead>
                 <tbody id="surDiagBody">
-                    <tr><td colspan="4" class="empty-state py-4 text-center text-muted"><i class="bi bi-info-circle"></i> Run <strong>Test config</strong> or start Suricata to populate diagnostics.</td></tr>
+                    <tr><td colspan="4" class="empty-state py-4 text-center text-muted">Run <strong>Test config</strong> or start Suricata.</td></tr>
                 </tbody>
             </table>
         </div>
@@ -83,52 +68,32 @@
 
 <div class="card mt-4">
     <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-2">
-        <span><i class="bi bi-table text-info"></i> EVE Monitor <span class="text-muted small fw-normal">— parsed events (alerts, flows, DNS…)</span></span>
+        <span><i class="bi bi-table text-info"></i> EVE Monitor</span>
         <div class="d-flex flex-wrap align-items-center gap-2">
             <span class="badge bg-secondary" id="surMonitorBadge">waiting</span>
             <span class="small text-muted" id="surMonitorCount">0 rows</span>
             <input type="search" id="surMonitorFilter" class="form-control form-control-sm" style="width:160px" placeholder="Filter…">
             <button type="button" id="btnSurMonitorPause" class="btn btn-outline-secondary btn-sm"><i class="bi bi-pause-fill"></i> Pause</button>
             <button type="button" id="btnSurMonitorClear" class="btn btn-outline-secondary btn-sm"><i class="bi bi-trash"></i> Clear</button>
+            <button type="button" id="btnSurExport" class="btn btn-outline-primary btn-sm"><i class="bi bi-download"></i> Export</button>
             <label class="small mb-0 d-flex align-items-center gap-1">
                 <input type="checkbox" id="chkSurMonitorAutoscroll" class="form-check-input mt-0" checked> Auto-scroll
             </label>
         </div>
     </div>
     <div class="card-body p-0">
-        <div class="capture-live-legend small px-3 py-2 border-bottom d-flex flex-wrap gap-3">
-            <span><span class="legend-swatch pkt-legend-critical"></span> Critical / alert</span>
-            <span><span class="legend-swatch pkt-legend-high"></span> High risk</span>
-            <span><span class="legend-swatch pkt-legend-medium"></span> Medium</span>
-            <span><span class="legend-swatch pkt-legend-info"></span> Normal</span>
-        </div>
         <div id="surMonitorWrap" class="suricata-table-wrap">
             <table class="table table-sm table-hover capture-packet-table mb-0">
                 <thead class="sticky-top">
                     <tr>
-                        <th>#</th>
-                        <th>Time</th>
-                        <th>Source</th>
-                        <th>Destination</th>
-                        <th>Proto</th>
-                        <th class="text-end">Len</th>
-                        <th>Info</th>
-                        <th>Risk</th>
+                        <th>#</th><th>Time</th><th>Source</th><th>Destination</th><th>Proto</th>
+                        <th class="text-end">Len</th><th>Info</th><th>Risk</th><th>Actions</th>
                     </tr>
                 </thead>
                 <tbody id="surMonitorBody">
-                    <tr><td colspan="8" class="empty-state py-4 text-center text-muted"><i class="bi bi-hourglass"></i> Start Suricata to stream EVE events here.</td></tr>
+                    <tr><td colspan="9" class="empty-state py-4 text-center text-muted">Start Suricata to stream EVE events.</td></tr>
                 </tbody>
             </table>
         </div>
     </div>
 </div>
-
-<input type="hidden" id="evePath" value="{{ live.default_eve_path }}">
-<script id="live-monitor-data" type="application/json">{{ live | tojson }}</script>
-{% include "partials/action_modal.html" %}
-{% endblock %}
-{% block scripts %}
-<script src="{{ url_for('static', filename='js/live_common.js') }}"></script>
-<script src="{{ url_for('static', filename='js/live_suricata.js') }}"></script>
-{% endblock %}

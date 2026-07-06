@@ -1,0 +1,131 @@
+<div class="soc-dashboard">
+    <div class="row g-2 mb-3">
+        <div class="col-6 col-lg-2">
+            <div class="soc-kpi soc-kpi-critical">
+                <div class="soc-kpi-icon"><i class="bi bi-exclamation-octagon"></i></div>
+                <div class="soc-kpi-value" id="socKpiCritical">0</div>
+                <div class="soc-kpi-label">Critical</div>
+            </div>
+        </div>
+        <div class="col-6 col-lg-2">
+            <div class="soc-kpi soc-kpi-high">
+                <div class="soc-kpi-icon"><i class="bi bi-exclamation-triangle"></i></div>
+                <div class="soc-kpi-value" id="socKpiHigh">0</div>
+                <div class="soc-kpi-label">High</div>
+            </div>
+        </div>
+        <div class="col-6 col-lg-2">
+            <div class="soc-kpi soc-kpi-medium">
+                <div class="soc-kpi-icon"><i class="bi bi-info-circle"></i></div>
+                <div class="soc-kpi-value" id="socKpiMedium">0</div>
+                <div class="soc-kpi-label">Medium</div>
+            </div>
+        </div>
+        <div class="col-6 col-lg-2">
+            <div class="soc-kpi soc-kpi-neutral">
+                <div class="soc-kpi-icon"><i class="bi bi-hdd-network"></i></div>
+                <div class="soc-kpi-value" id="socKpiFlows">0</div>
+                <div class="soc-kpi-label">Flows Scored</div>
+            </div>
+        </div>
+        <div class="col-6 col-lg-2">
+            <div class="soc-kpi soc-kpi-neutral">
+                <div class="soc-kpi-icon"><i class="bi bi-lightning"></i></div>
+                <div class="soc-kpi-value" id="socKpiAlerts">0</div>
+                <div class="soc-kpi-label">Total Alerts</div>
+            </div>
+        </div>
+        <div class="col-6 col-lg-2">
+            <div class="soc-kpi soc-kpi-neutral">
+                <div class="soc-kpi-icon"><i class="bi bi-speedometer2"></i></div>
+                <div class="soc-kpi-value" id="socKpiEps">—</div>
+                <div class="soc-kpi-label">Events / sec</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-3 mb-3">
+        <div class="col-lg-5">
+            <div class="card soc-panel h-100">
+                <div class="card-header d-flex justify-content-between align-items-center py-2">
+                    <span><i class="bi bi-list-ul text-danger"></i> Alert Queue</span>
+                    <span class="badge bg-secondary" id="socQueueCount">0 open</span>
+                </div>
+                <div class="px-2 py-2 border-bottom d-flex flex-wrap gap-1" id="socAlertFilters">
+                    <button type="button" class="btn btn-outline-secondary btn-sm active" data-severity="">All</button>
+                    <button type="button" class="btn btn-outline-danger btn-sm" data-severity="critical">Critical</button>
+                    <button type="button" class="btn btn-outline-warning btn-sm" data-severity="high">High</button>
+                    <button type="button" class="btn btn-outline-info btn-sm" data-severity="medium">Medium</button>
+                    <button type="button" class="btn btn-outline-dark btn-sm" data-source="ml">ML</button>
+                    <button type="button" class="btn btn-outline-dark btn-sm" data-source="suricata">Suricata</button>
+                </div>
+                <div class="soc-alert-queue" id="socAlertQueue">
+                    <div class="soc-empty" id="socQueueEmpty">
+                        <i class="bi bi-shield-check"></i>
+                        <div>No alerts yet</div>
+                        <div class="small">Start capture + ML monitor to populate the queue.</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-4">
+            <div class="card soc-panel h-100" id="socInspectorCard">
+                <div class="card-header py-2"><i class="bi bi-search text-info"></i> Alert Inspector</div>
+                <div class="card-body" id="socInspector">
+                    <div class="soc-inspector-empty">
+                        <i class="bi bi-cursor"></i>
+                        <p class="mb-0 small">Click an alert or network event to view details, insights, and response actions.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-3">
+            <div class="card soc-panel">
+                <div class="card-header py-2"><i class="bi bi-heart-pulse"></i> Sensor Health</div>
+                <div class="card-body small" id="socSensorHealth">
+                    <div class="text-muted">Loading…</div>
+                </div>
+            </div>
+            <div class="card soc-panel mt-3">
+                <div class="card-header py-2"><i class="bi bi-lightbulb"></i> Analyst Insights</div>
+                <div class="card-body small" id="socInsightsList">
+                    <div class="text-muted">Insights appear when alerts are detected.</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card soc-panel">
+        <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-2 py-2">
+            <span><i class="bi bi-activity"></i> Network Event Stream</span>
+            <div class="d-flex align-items-center gap-2">
+                <span class="badge bg-secondary" id="socStreamBadge">waiting</span>
+                <span class="small text-muted" id="socStreamCount">0 events</span>
+            </div>
+        </div>
+        <div class="card-body p-0">
+            <div class="capture-live-wrap soc-event-stream">
+                <table class="table table-sm table-hover capture-packet-table mb-0">
+                    <thead class="sticky-top">
+                        <tr>
+                            <th>Time</th>
+                            <th>Type</th>
+                            <th>Source</th>
+                            <th>Destination</th>
+                            <th>Info</th>
+                            <th>Risk</th>
+                        </tr>
+                    </thead>
+                    <tbody id="socEventStream">
+                        <tr><td colspan="6" class="empty-state py-4 text-center">Start capture to see live events. Click any row for details.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Hidden KPI sync targets for live_common.js -->
+    <span class="d-none" id="flowCount">0</span>
+    <span class="d-none" id="alertCount">0</span>
+    <span class="d-none" id="sessionId">—</span>
+</div>

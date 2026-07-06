@@ -35,13 +35,30 @@ class Config:
     NVIDIA_API_BASE = os.environ.get(
         "NVIDIA_API_BASE", "https://integrate.api.nvidia.com/v1"
     )
+    LLM_SECONDARY_MODEL = os.environ.get("LLM_SECONDARY_MODEL", "")
+    LLM_SECONDARY_MAX_TOKENS = int(os.environ.get("LLM_SECONDARY_MAX_TOKENS", 16384))
+    LLM_ENSEMBLE_ENABLED = os.environ.get("LLM_ENSEMBLE_ENABLED", "true").lower() == "true"
+    LLM_ENSEMBLE_PARALLEL = os.environ.get("LLM_ENSEMBLE_PARALLEL", "true").lower() == "true"
+    LLM_ENSEMBLE_BIG_CONTEXT_CHARS = int(os.environ.get("LLM_ENSEMBLE_BIG_CONTEXT_CHARS", 8000))
+    OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
+    OPENROUTER_MODEL = os.environ.get("OPENROUTER_MODEL", "deepseek/deepseek-chat")
+    OPENROUTER_BASE = os.environ.get("OPENROUTER_BASE", "https://openrouter.ai/api/v1")
 
     VIRUSTOTAL_API_KEY = os.environ.get("VIRUSTOTAL_API_KEY", "")
     ABUSEIPDB_API_KEY = os.environ.get("ABUSEIPDB_API_KEY", "")
     ANYRUN_API_KEY = os.environ.get("ANYRUN_API_KEY", "")
+    ANYRUN_LOOKUP_DEPTH = int(os.environ.get("ANYRUN_LOOKUP_DEPTH", 180))
     SHODAN_API_KEY = os.environ.get("SHODAN_API_KEY", "")
     URLSCAN_API_KEY = os.environ.get("URLSCAN_API_KEY", "")
     OTX_API_KEY = os.environ.get("OTX_API_KEY", "")
+    GREYNOISE_API_KEY = os.environ.get("GREYNOISE_API_KEY", "")
+    PULSEDIVE_API_KEY = os.environ.get("PULSEDIVE_API_KEY", "")
+    IPINFO_TOKEN = os.environ.get("IPINFO_TOKEN", "")
+
+    AUTO_SYNC_EVE = os.environ.get("AUTO_SYNC_EVE", "true").lower() == "true"
+    ALERT_ENHANCED_ANALYSIS = os.environ.get("ALERT_ENHANCED_ANALYSIS", "false").lower() == "true"
+    LLM_LIVE_ALERT_SYNTHESIS = os.environ.get("LLM_LIVE_ALERT_SYNTHESIS", "false").lower() == "true"
+    EVE_IMPORT_MAX_MB = int(os.environ.get("EVE_IMPORT_MAX_MB", 100))
 
     MAXMIND_DB_PATH = os.environ.get("MAXMIND_DB_PATH", "")
 
@@ -70,6 +87,10 @@ class Config:
     LIVE_PORT_ENTROPY_WINDOW = int(os.environ.get("LIVE_PORT_ENTROPY_WINDOW", 300))
     LIVE_INGEST_SURICATA_ALERTS = os.environ.get("LIVE_INGEST_SURICATA_ALERTS", "true").lower() == "true"
     LIVE_CORRELATION_WINDOW = int(os.environ.get("LIVE_CORRELATION_WINDOW", 120))
+    SCAPY_FLOW_IDLE_SEC = float(os.environ.get("SCAPY_FLOW_IDLE_SEC", 5))
+    LIVE_ML_TCPDUMP_ENABLED = os.environ.get("LIVE_ML_TCPDUMP_ENABLED", "true").lower() == "true"
+    CAPTURE_LAB_ENABLED = os.environ.get("CAPTURE_LAB_ENABLED", "false").lower() == "true"
+    LAB_ROTATE_SEC = int(os.environ.get("LAB_ROTATE_SEC", 12))
 
     SURICATA_BIN = os.environ.get("SURICATA_BIN", "suricata")
     SURICATA_CONFIG_PATH = os.environ.get("SURICATA_CONFIG_PATH", "")
@@ -112,6 +133,7 @@ class Config:
     # SOC chatbot (reuses LLM_* provider settings)
     CHATBOT_ENABLED = os.environ.get("CHATBOT_ENABLED", "true").lower() == "true"
     CHATBOT_MAX_HISTORY = int(os.environ.get("CHATBOT_MAX_HISTORY", 10))
+    CHATBOT_MAX_CONTEXT_CHARS = int(os.environ.get("CHATBOT_MAX_CONTEXT_CHARS", 32000))
 
     RATELIMIT_DEFAULT = "200 per hour"
     RATELIMIT_UPLOAD = "10 per hour"

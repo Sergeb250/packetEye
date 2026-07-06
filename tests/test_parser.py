@@ -43,3 +43,5 @@ def test_parse_minimal_pcap():
 def test_ip_classification():
     assert is_private_ip("192.168.1.1") is True
     assert is_external_ip("8.8.8.8") is True
+    assert is_external_ip("239.255.255.250") is False
+    assert is_private_ip("239.255.255.250") is True

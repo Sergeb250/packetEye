@@ -1,14 +1,16 @@
+{% set thresh = 5.0 %}
 <div class="table-responsive">
-    <table class="table table-sm table-hover">
+    <table class="table table-sm table-hover" id="flowTable">
         <thead>
             <tr>
                 <th>Src IP</th><th>Dst IP</th><th>Port</th><th>Proto</th>
                 <th>Bytes</th><th>Duration</th><th>App</th><th>Score</th>
+                <th>Actions</th>
             </tr>
         </thead>
         <tbody>
             {% for f in flows %}
-            <tr>
+            <tr class="{% if (f.anomaly_score or 0) >= thresh %}table-warning{% endif %}" data-flow-id="{{ f.id }}">
                 <td>{{ f.src_ip }}</td>
                 <td>{{ f.dst_ip }}</td>
                 <td>{{ f.dst_port }}</td>
@@ -17,6 +19,11 @@
                 <td>{{ f.duration_ms }}ms</td>
                 <td>{{ f.application_layer or '—' }}</td>
                 <td>{{ '%.1f'|format(f.severity_score or f.anomaly_score or 0) }}</td>
+                <td class="text-nowrap">
+                    <button type="button" class="btn btn-outline-info btn-sm py-0 btn-flow-investigate" data-flow-id="{{ f.id }}">Investigate</button>
+                    <button type="button" class="btn btn-outline-secondary btn-sm py-0 btn-flow-map" data-flow-id="{{ f.id }}" data-dst="{{ f.dst_ip|e }}">Map</button>
+                    <button type="button" class="btn btn-outline-warning btn-sm py-0 btn-flow-ai" data-flow-id="{{ f.id }}" data-dst="{{ f.dst_ip|e }}">AI</button>
+                </td>
             </tr>
             {% endfor %}
         </tbody>

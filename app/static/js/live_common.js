@@ -40,6 +40,31 @@ function renderDiagnosticsTable(rows) {
 
 function showErrorDetails(title, data) {
     return new Promise((resolve) => {
+        if (useInlineLiveOps()) {
+            const box = document.getElementById('liveOpsFeedback');
+            const body = document.getElementById('liveOpsFeedbackBody');
+            const extra = document.getElementById('liveOpsFeedbackExtra');
+            if (box && body) {
+                box.className = 'alert alert-danger mb-3';
+                body.textContent = `${title}\n\n${formatApiError(data)}`;
+                let html = '';
+                if (data?.command) {
+                    html += `<div class="mt-2"><span class="text-muted">Command:</span><br><code class="small user-select-all">${esc(data.command)}</code></div>`;
+                }
+                if (data?.config_path) {
+                    html += `<div class="mt-1"><span class="text-muted">Config:</span> <code class="small">${esc(data.config_path)}</code></div>`;
+                }
+                html += renderDiagnosticsTable(data?.diagnostics);
+                if (extra) extra.innerHTML = html;
+                box.classList.remove('d-none');
+                box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                if (window.suricataPage?.renderDiagnosticsRows && data?.diagnostics?.length) {
+                    window.suricataPage.renderDiagnosticsRows(data.diagnostics);
+                }
+                resolve();
+                return;
+            }
+        }
         const titleEl = document.getElementById('actionModalTitle');
         const bodyEl = document.getElementById('actionModalBody');
         const cancelBtn = document.getElementById('actionModalCancel');
@@ -81,8 +106,38 @@ function initActionModal() {
     if (el) actionModalInst = new bootstrap.Modal(el);
 }
 
+function useInlineLiveOps() {
+    return Boolean(document.getElementById('liveOpsFeedback'));
+}
+
+function showInlineFeedback(message, variant = 'info', title = null) {
+    const box = document.getElementById('liveOpsFeedback');
+    const body = document.getElementById('liveOpsFeedbackBody');
+    const extra = document.getElementById('liveOpsFeedbackExtra');
+    if (!box || !body) return false;
+    const variants = { success: 'alert-success', danger: 'alert-danger', warning: 'alert-warning', info: 'alert-info' };
+    box.className = `alert ${variants[variant] || variants.info} mb-3`;
+    body.textContent = title ? `${title}\n\n${message}` : message;
+    if (extra) extra.innerHTML = '';
+    box.classList.remove('d-none');
+    box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    return true;
+}
+
+function hideInlineFeedback() {
+    document.getElementById('liveOpsFeedback')?.classList.add('d-none');
+    const extra = document.getElementById('liveOpsFeedbackExtra');
+    if (extra) extra.innerHTML = '';
+}
+
+window.showInlineFeedback = showInlineFeedback;
+
 function showNotice(title, message, variant = 'danger') {
     return new Promise((resolve) => {
+        if (showInlineFeedback(message, variant, title)) {
+            resolve();
+            return;
+        }
         const titleEl = document.getElementById('actionModalTitle');
         const bodyEl = document.getElementById('actionModalBody');
         const cancelBtn = document.getElementById('actionModalCancel');
@@ -109,6 +164,30 @@ function showNotice(title, message, variant = 'danger') {
 
 function confirmAction(title, message, variant = 'warning') {
     return new Promise((resolve) => {
+        const confirmBox = document.getElementById('liveOpsConfirm');
+        if (confirmBox) {
+            const titleEl = document.getElementById('liveOpsConfirmTitle');
+            const bodyEl = document.getElementById('liveOpsConfirmBody');
+            const yesBtn = document.getElementById('liveOpsConfirmYes');
+            const noBtn = document.getElementById('liveOpsConfirmNo');
+            if (titleEl && bodyEl && yesBtn && noBtn) {
+                titleEl.textContent = title;
+                bodyEl.textContent = message;
+                confirmBox.classList.remove('d-none');
+                confirmBox.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                const cleanup = (result) => {
+                    confirmBox.classList.add('d-none');
+                    yesBtn.removeEventListener('click', onYes);
+                    noBtn.removeEventListener('click', onNo);
+                    resolve(result);
+                };
+                const onYes = () => cleanup(true);
+                const onNo = () => cleanup(false);
+                yesBtn.addEventListener('click', onYes);
+                noBtn.addEventListener('click', onNo);
+                return;
+            }
+        }
         const titleEl = document.getElementById('actionModalTitle');
         const bodyEl = document.getElementById('actionModalBody');
         const cancelBtn = document.getElementById('actionModalCancel');
@@ -165,8 +244,10 @@ async function apiAction({ url, method = 'POST', body, busyKey, btn, busyLabel, 
             }
             return { ok: false, data, status: res.status };
         }
-        if (successMessage) {
+        if (successMessage && !useInlineLiveOps()) {
             await showNotice(successTitle || 'Success', successMessage, 'success');
+        } else if (successMessage) {
+            showInlineFeedback(successMessage, 'success', successTitle || 'Success');
         }
         return { ok: true, data };
     } catch {
@@ -220,25 +301,48 @@ function showPathFeedback(message, type = 'muted') {
 
 async function syncEveFromCapture() {
     try {
-        const res = await fetch('/api/capture/status');
-        if (!res.ok) return;
-        const s = await res.json();
-        const path = s.suricata?.eve?.path || liveConfig.capture?.eve_path || liveConfig.default_eve_path || '';
+        const [capRes, surRes] = await Promise.all([
+            fetch('/api/capture/status'),
+            fetch('/api/suricata/status'),
+        ]);
+        const s = capRes.ok ? await capRes.json() : {};
+        const sur = surRes.ok ? await surRes.json() : {};
+        const path = sur.eve?.path || s.suricata?.eve?.path || liveConfig.capture?.eve_path || liveConfig.default_eve_path || '';
+        const eveInput = document.getElementById('evePathInput');
         if (path && els.evePath) {
             els.evePath.value = path;
         }
+        if (path && eveInput && !eveInput.value.trim()) {
+            eveInput.value = path;
+        }
         const disp = document.getElementById('evePathDisplay');
-        if (disp && path) disp.textContent = path;
+        if (disp && path) disp.textContent = path + (sur.eve?.source ? ` (${sur.eve.source})` : '');
 
         const mlBadge = document.getElementById('mlCaptureBadge');
         if (mlBadge) {
             if (s.running) {
                 mlBadge.textContent = `capture: ${s.mode} · ${s.interface || '?'}`;
                 mlBadge.className = 'badge bg-success';
+            } else if (sur.running && !sur.managed) {
+                mlBadge.textContent = 'external suricata · connected';
+                mlBadge.className = 'badge bg-info text-dark';
+            } else if (sur.running) {
+                mlBadge.textContent = 'suricata · live';
+                mlBadge.className = 'badge bg-success';
             } else {
                 mlBadge.textContent = 'capture: stopped';
                 mlBadge.className = 'badge bg-secondary';
             }
+        }
+
+        if (sur.eve?.path && liveConfig.auto_sync_eve !== false && sessionId && path !== els.evePath?.dataset.lastRebind) {
+            fetch('/api/live/rebind-eve', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ session_id: sessionId, eve_path: path }),
+            }).then(() => {
+                if (els.evePath) els.evePath.dataset.lastRebind = path;
+            }).catch(() => {});
         }
 
         if (s.interface && els.iface && !els.iface.value.trim()) {
@@ -250,6 +354,65 @@ async function syncEveFromCapture() {
     } catch {
         /* optional sync */
     }
+}
+
+window.alertSeverityFilter = '';
+
+async function importEveFile() {
+    const fileInput = document.getElementById('eveFileUpload');
+    const pathInput = document.getElementById('evePathInput');
+    const form = new FormData();
+    if (fileInput?.files?.[0]) {
+        form.append('file', fileInput.files[0]);
+    } else if (pathInput?.value.trim()) {
+        const res = await fetch('/api/live/import-eve', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ eve_path: pathInput.value.trim() }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+            await showNotice('Import failed', data.error || 'Failed', 'danger');
+            return null;
+        }
+        return data.eve_path;
+    } else {
+        await showNotice('Import EVE', 'Choose a file or paste a path.', 'warning');
+        return null;
+    }
+    const res = await fetch('/api/live/import-eve', { method: 'POST', body: form });
+    const data = await res.json();
+    if (!res.ok) {
+        await showNotice('Import failed', data.error || 'Failed', 'danger');
+        return null;
+    }
+    return data.eve_path;
+}
+
+async function plugEveIntoMl(evePath) {
+    const path = evePath || document.getElementById('evePathInput')?.value?.trim() || els.evePath?.value?.trim();
+    if (!path) {
+        await showNotice('EVE path required', 'Set or import an eve.json path first.', 'warning');
+        return;
+    }
+    if (els.evePath) els.evePath.value = path;
+    if (sessionId) {
+        const res = await fetch('/api/live/rebind-eve', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ session_id: sessionId, eve_path: path }),
+        });
+        const data = await res.json();
+        if (res.ok) {
+            await showNotice('EVE plugged in', `ML session now tailing ${path}`, 'success');
+        } else {
+            await showNotice('Rebind failed', data.error || 'Failed', 'danger');
+        }
+        return;
+    }
+    showPathFeedback('Starting ML on imported EVE…', 'info');
+    if (els.evePath) els.evePath.value = path;
+    await startMonitor();
 }
 
 async function loadConfig() {
@@ -290,8 +453,13 @@ async function loadConfig() {
     }
 }
 
+let sessionResumed = false;
+
 function resumeSession(status) {
+    if (sessionResumed && sessionId === status.session_id) return;
+    sessionResumed = true;
     sessionId = status.session_id;
+    window.sessionId = sessionId;
     if (els.sessionId) {
         els.sessionId.textContent = `${sessionId.slice(0, 8)}…`;
         els.sessionId.title = sessionId;
@@ -303,6 +471,7 @@ function resumeSession(status) {
     setStatus('running', 'bg-success', true);
     if (pollTimer) clearInterval(pollTimer);
     pollTimer = setInterval(pollLive, 2000);
+    if (typeof window.socLoadAlerts === 'function') window.socLoadAlerts();
 }
 
 async function startMonitor() {
@@ -354,17 +523,27 @@ async function startMonitor() {
         }
 
         if (data.mode === 'tcpdump') {
-            showPathFeedback(data.note || 'tcpdump capture started — chunks appear under Analyses.', 'success');
+            showPathFeedback(data.note || 'tcpdump capture + ML started.', 'success');
             refreshCapture();
+            if (data.session_id) {
+                resumeSession({
+                    session_id: data.session_id,
+                    total_flows: 0,
+                    total_findings: 0,
+                });
+                alertSince = 0;
+                totalAlertsShown = 0;
+            } else if (data.ml_status === 'model_missing') {
+                showPathFeedback('Capture started but ML model missing — train model first.', 'warning');
+            }
             if (els.btnStart) {
-                els.btnStart.disabled = false;
                 els.btnStart.innerHTML = '<i class="bi bi-play-fill"></i> Start ML Live Monitor';
             }
-            document.getElementById('section-capture')?.scrollIntoView({ behavior: 'smooth' });
             return;
         }
 
         sessionId = data.session_id;
+        window.sessionId = sessionId;
         if (data.eve_path && els.evePath) els.evePath.value = data.eve_path;
         if (els.sessionId) {
             els.sessionId.textContent = `${sessionId.slice(0, 8)}…`;
@@ -383,6 +562,7 @@ async function startMonitor() {
         pollTimer = setInterval(pollLive, 2000);
         pollLive();
         refreshCapture();
+        if (typeof window.socLoadAlerts === 'function') window.socLoadAlerts();
         document.getElementById('alertFeedSection')?.scrollIntoView({ behavior: 'smooth' });
     } catch {
         showPathFeedback('Network error — could not start monitor.', 'danger');
@@ -406,6 +586,9 @@ async function stopMonitor() {
             body: JSON.stringify({ session_id: sessionId }),
         });
         if (pollTimer) clearInterval(pollTimer);
+        pollTimer = null;
+        sessionId = null;
+        window.sessionId = null;
         if (els.btnStart) els.btnStart.disabled = false;
         setStatus('stopped', 'bg-secondary', false);
         showPathFeedback('Monitor stopped.', 'muted');
@@ -420,16 +603,28 @@ async function stopMonitor() {
 
 async function pollLive() {
     if (!sessionId) return;
+    const sev = window.socAlertSeverity || window.alertSeverityFilter || '';
+    const src = window.socAlertSource || '';
+    let alertUrl = `/api/live/alerts?session_id=${sessionId}&since=${alertSince}`;
+    if (sev) alertUrl += `&severity=${encodeURIComponent(sev)}`;
+    if (src) alertUrl += `&source=${encodeURIComponent(src)}`;
     const [statusRes, alertsRes] = await Promise.all([
         fetch(`/api/live/status?session_id=${sessionId}`),
-        fetch(`/api/live/alerts?session_id=${sessionId}&since=${alertSince}`),
+        fetch(alertUrl),
     ]);
+    let status = null;
     if (statusRes.ok) {
-        const status = await statusRes.json();
+        status = await statusRes.json();
         if (els.flowCount) els.flowCount.textContent = (status.total_flows || 0).toLocaleString();
         if (els.alertCount) els.alertCount.textContent = (status.total_findings || 0).toLocaleString();
+        const socFlows = document.getElementById('socKpiFlows');
+        const socAlerts = document.getElementById('socKpiAlerts');
+        if (socFlows) socFlows.textContent = (status.total_flows || 0).toLocaleString();
+        if (socAlerts) socAlerts.textContent = (status.total_findings || 0).toLocaleString();
         if (status.running) setStatus('running', 'bg-success', true);
         else if (sessionId) setStatus('stopped', 'bg-secondary', false);
+        if (typeof window.socUpdateStatus === 'function') window.socUpdateStatus(status);
+        window.socServerTotal = status.total_findings || 0;
     }
     if (alertsRes.ok) {
         const { alerts } = await alertsRes.json();
@@ -437,6 +632,7 @@ async function pollLive() {
             renderAlerts(alerts);
             alertSince = Math.max(...alerts.map((a) => a.timestamp));
         }
+        if (typeof window.socOnAlerts === 'function' && alerts.length) window.socOnAlerts(alerts);
     }
 }
 
@@ -463,15 +659,21 @@ function renderAlerts(alerts) {
     alerts.slice().reverse().forEach((a) => {
         const meta = severityMeta(a.severity);
         const isSuricata = a.type === 'suricata';
-        const sourceBadge = isSuricata
+        const isCorr = a.type === 'correlation';
+        const sourceBadge = isCorr
+            ? '<span class="badge bg-danger"><i class="bi bi-link-45deg"></i> CORR</span>'
+            : isSuricata
             ? '<span class="badge bg-warning text-dark"><i class="bi bi-shield-exclamation"></i> SURICATA</span>'
             : '<span class="badge bg-info text-dark"><i class="bi bi-cpu"></i> ML</span>';
         const detailBadge = isSuricata
             ? `<span class="badge text-bg-light border">${esc(a.category || 'signature')}</span>`
             : `<span class="badge text-bg-light border">score ${a.anomaly_score}</span>`;
         const detailText = isSuricata ? (a.signature || a.explanation) : a.explanation;
+        const insight = typeof window.socBuildInsight === 'function' ? window.socBuildInsight(a) : null;
         const item = document.createElement('div');
-        item.className = `list-group-item alert-feed-item severity-${a.severity || 'info'}`;
+        item.className = `list-group-item alert-feed-item severity-${a.severity || 'info'} soc-clickable-alert`;
+        item.style.cursor = 'pointer';
+        item.title = 'Click for details';
         item.innerHTML = `
             <div class="d-flex justify-content-between align-items-start gap-2 mb-1">
                 <span class="badge bg-${meta.badge}">${meta.label}</span>
@@ -479,16 +681,68 @@ function renderAlerts(alerts) {
                 ${detailBadge}
                 <small class="text-muted ms-auto">${new Date(a.timestamp * 1000).toLocaleTimeString()}</small>
             </div>
+            ${insight ? `<div class="small fw-semibold text-dark mb-1">${esc(insight.headline)}</div>` : ''}
             <div class="font-monospace small">
                 ${esc(a.src_ip)}:${a.src_port || '*'} → ${esc(a.dst_ip)}:${a.dst_port || '*'}
                 <span class="text-muted">(${esc(a.protocol) || '?'})</span>
             </div>
             ${detailText ? `<small class="text-muted d-block mt-1">${esc(detailText)}</small>` : ''}
-            ${a.finding_id ? `<button class="btn btn-outline-info btn-sm mt-2 btn-investigate" data-finding-id="${esc(a.finding_id)}">
+            <div class="d-flex flex-wrap gap-1 mt-2 soc-alert-actions">
+            ${a.finding_id ? `<button class="btn btn-outline-info btn-sm btn-investigate" data-finding-id="${esc(a.finding_id)}">
                 <i class="bi bi-search"></i> Investigate</button>` : ''}
-        `;
+            ${a.dst_ip && sessionId ? `<button class="btn btn-outline-primary btn-sm btn-alert-osint" data-ip="${esc(a.dst_ip)}">OSINT</button>` : ''}
+            ${a.dst_ip && sessionId ? `<button class="btn btn-outline-secondary btn-sm btn-alert-map" data-ip="${esc(a.dst_ip)}">Map</button>` : ''}
+            ${sessionId ? `<button class="btn btn-info btn-sm btn-alert-ai"><i class="bi bi-robot"></i> AI</button>` : ''}
+            </div>`;
+        item.addEventListener('click', (e) => {
+            if (e.target.closest('.soc-alert-actions')) return;
+            if (typeof window.socSelectAlert === 'function') {
+                window.socSelectAlert(a);
+                if (window.livePage !== 'overview') window.location.href = '/live/overview';
+            }
+        });
+        item.querySelector('.btn-alert-ai')?.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (window.openChatWithContext) {
+                window.openChatWithContext(
+                    'Analyze this live alert with full JSON. Use tables for IOCs and mermaid for traffic flow.',
+                    sessionId,
+                    a.finding_id || null,
+                    { type: 'live_alert', raw: a },
+                    null,
+                );
+            }
+        });
         const invBtn = item.querySelector('.btn-investigate');
         if (invBtn) invBtn.addEventListener('click', () => investigateFinding(invBtn.dataset.findingId));
+        item.querySelector('.btn-alert-osint')?.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (window.openOsintForTarget && sessionId) {
+                window.openOsintForTarget(sessionId, e.target.dataset.ip);
+            }
+        });
+        item.querySelector('.btn-alert-map')?.addEventListener('click', async (e) => {
+            const ip = e.target.dataset.ip;
+            const mapPanel = document.getElementById('liveThreatMapPanel');
+            const canvas = document.getElementById('liveThreatMapCanvas');
+            if (!mapPanel || !canvas || !sessionId) return;
+            mapPanel.classList.remove('d-none');
+            canvas.innerHTML = '';
+            try {
+                const res = await fetch(`/api/analysis/${sessionId}/geo`);
+                const data = res.ok ? await res.json() : { markers: [] };
+                let markers = data.markers || [];
+                if (ip) markers = markers.filter((m) => m.ip === ip);
+                if (!markers.length) {
+                    showInlineFeedback(`No geo for ${ip} yet — run Investigate/OSINT first.`, 'warning', 'Map');
+                    return;
+                }
+                window.renderThreatMap('liveThreatMapCanvas', markers);
+                mapPanel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            } catch {
+                showInlineFeedback('Threat map unavailable.', 'danger', 'Map');
+            }
+        });
         els.alertFeed?.prepend(item);
         totalAlertsShown += 1;
     });
@@ -878,6 +1132,18 @@ async function startCapture() {
         const data = result.data;
         capFeedback(`Capture running (${data.mode}, pid ${data.pid}).`, 'success');
         if (data.eve_hint && els.evePath) els.evePath.value = data.eve_hint;
+        if (data.session_id) {
+            resumeSession({
+                session_id: data.session_id,
+                total_flows: 0,
+                total_findings: 0,
+            });
+            alertSince = 0;
+            totalAlertsShown = 0;
+            capFeedback(`Capture + ML live (${data.mode}, session ${data.session_id.slice(0, 8)}…).`, 'success');
+        } else if (data.ml_status === 'model_missing') {
+            capFeedback('Capture started — ML model not loaded.', 'warning');
+        }
         await showNotice('Capture started', `Traffic capture running (${data.mode}, pid ${data.pid}).`, 'success');
     } else if (result) {
         capFeedback(formatApiError(result.data), 'danger');
@@ -908,7 +1174,16 @@ async function stopCapture() {
     });
     if (result?.ok) {
         capFeedback('Capture stopped.', 'muted');
-        await showNotice('Capture stopped', 'Traffic capture has been stopped.', 'success');
+        if (pollTimer) {
+            clearInterval(pollTimer);
+            pollTimer = null;
+        }
+        sessionId = null;
+        window.sessionId = null;
+        if (els.btnStop) els.btnStop.disabled = true;
+        if (els.btnStart) els.btnStart.disabled = false;
+        setStatus('idle', 'bg-secondary', false);
+        await showNotice('Capture stopped', 'Traffic capture and ML session stopped.', 'success');
     } else if (result?.data?.cleared_stale_state) {
         capFeedback('Cleared stale capture state.', 'warning');
         await showNotice(
@@ -945,11 +1220,366 @@ if (sur.iface) {
 }
 
 function initSectionNav() {
-    /* live monitor uses separate pages — see partials/live_nav.html */
+    const tabMap = {
+        overview: '#tab-overview',
+        capture: '#tab-capture',
+        suricata: '#tab-suricata',
+        ml: '#tab-ml',
+        lab: '#tab-lab',
+    };
+    const page = window.livePage || 'overview';
+    const target = tabMap[page] || tabMap.overview;
+    const pane = document.querySelector(target);
+    if (pane && !pane.classList.contains('active')) {
+        document.querySelectorAll('#liveOpsTabContent .tab-pane').forEach((el) => {
+            el.classList.remove('show', 'active');
+        });
+        pane.classList.add('show', 'active');
+    }
+}
+
+async function refreshOverviewPanels() {
+    const capEl = document.getElementById('overviewCaptureStatus');
+    const surEl = document.getElementById('overviewSuricataStatus');
+    if (!capEl && !surEl) return;
+    try {
+        const [capRes, surRes] = await Promise.all([
+            fetch('/api/capture/status'),
+            fetch('/api/suricata/status'),
+        ]);
+        const cap = capRes.ok ? await capRes.json() : {};
+        const sur = surRes.ok ? await surRes.json() : {};
+        if (capEl) {
+            capEl.innerHTML = `
+                <div><strong>Status:</strong> ${cap.running ? `${esc(cap.mode)} (pid ${cap.pid || '—'})` : 'stopped'}</div>
+                <div><strong>Interface:</strong> ${esc(cap.interface || '—')}</div>
+                <div><strong>Chunks:</strong> ${cap.tcpdump?.chunks?.count ?? '—'}</div>
+                <div><strong>Watcher:</strong> ${cap.chunk_watcher?.running ? 'running' : 'off'}</div>`;
+        }
+        if (surEl) {
+            surEl.innerHTML = `
+                <div><strong>Installed:</strong> ${sur.installed ? 'yes' : 'no'}</div>
+                <div><strong>Running:</strong> ${sur.running ? 'yes' : 'no'}</div>
+                <div><strong>EVE:</strong> <code class="small">${esc(sur.eve?.path || '—')}</code></div>
+                <div><strong>Rate:</strong> ${sur.eve?.events_per_second != null ? sur.eve.events_per_second.toFixed(1) + '/s' : '—'}</div>`;
+        }
+    } catch {
+        /* ignore */
+    }
+}
+
+async function toggleLabTraffic() {
+    const btn = document.getElementById('opsBtnLabToggle');
+    const running = btn?.dataset.running === 'true';
+    if (running) {
+        await stopLabTraffic();
+    } else {
+        await runLabTraffic();
+    }
+}
+
+async function runLabTraffic() {
+    const patterns = [];
+    document.querySelectorAll('.lab-pat:checked').forEach((el) => {
+        if (el?.value) patterns.push(el.value);
+    });
+    const iface = (document.getElementById('labIface')?.value || cap.iface?.value || sur.iface?.value || '').trim();
+    const logEl = document.getElementById('labLog');
+    const btn = document.getElementById('opsBtnLabToggle');
+    if (!patterns.length) {
+        await showNotice('Lab traffic', 'Select at least one attack pattern.', 'warning');
+        showInlineFeedback('Select at least one attack pattern.', 'warning', 'Lab traffic');
+        return;
+    }
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Starting…';
+    }
+    if (logEl) logEl.textContent = 'Starting lab generator…';
+    try {
+        const res = await fetch('/api/lab/start', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ patterns, interface: iface }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+            const msg = data.hint ? `${data.error} — ${data.hint}` : (data.error || 'Failed to start');
+            if (logEl) logEl.textContent = msg;
+            await showNotice('Lab start failed', msg, 'danger');
+            showInlineFeedback(msg, 'danger', 'Lab traffic');
+            setLabToggleState(false);
+            return;
+        }
+        setLabToggleState(true);
+        await showNotice('Lab traffic started', `Generating ${patterns.length} attack pattern(s) on ${data.interface || iface}.`, 'success');
+        showInlineFeedback('Lab traffic running — watch ML alerts on Overview.', 'success', 'Lab traffic');
+        startLabPoll();
+        refreshLabStatus();
+    } catch (err) {
+        await showNotice('Lab start failed', String(err), 'danger');
+        setLabToggleState(false);
+    }
+}
+
+async function stopLabTraffic() {
+    const logEl = document.getElementById('labLog');
+    const btn = document.getElementById('opsBtnLabToggle');
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Stopping…';
+    }
+    try {
+        const res = await fetch('/api/lab/stop', { method: 'POST' });
+        const data = await res.json();
+        stopLabPoll();
+        if (!res.ok || data.ok === false) {
+            const msg = data.error || 'Failed to stop lab generator';
+            await showNotice('Lab stop failed', msg, 'danger');
+            showInlineFeedback(msg, 'danger', 'Lab traffic');
+        } else {
+            await showNotice('Lab traffic stopped', data.message || 'Generator stopped.', 'success');
+            showInlineFeedback('Lab traffic stopped.', 'info', 'Lab traffic');
+        }
+        setLabToggleState(false);
+        refreshLabStatus();
+        if (logEl && data.message) logEl.textContent += `\n[ui] ${data.message}`;
+    } catch (err) {
+        await showNotice('Lab stop failed', String(err), 'danger');
+        setLabToggleState(false);
+    }
+}
+
+function setLabToggleState(running) {
+    const btn = document.getElementById('opsBtnLabToggle');
+    if (!btn) return;
+    btn.dataset.running = running ? 'true' : 'false';
+    btn.disabled = false;
+    if (running) {
+        btn.className = 'btn btn-danger btn-sm mt-3';
+        btn.innerHTML = '<i class="bi bi-stop-fill"></i> Stop lab traffic';
+    } else {
+        btn.className = 'btn btn-primary btn-sm mt-3';
+        btn.innerHTML = '<i class="bi bi-play-fill"></i> Start lab traffic';
+    }
+}
+
+function renderLabAttackTable(rows) {
+    const body = document.getElementById('labAttackBody');
+    if (!body) return;
+    if (!rows?.length) {
+        body.innerHTML = '<tr><td colspan="4" class="text-muted small">Start lab traffic to see active attacks.</td></tr>';
+        return;
+    }
+    const statusBadge = (s) => {
+        const map = { active: 'success', queued: 'secondary', done: 'light text-dark', pending: 'secondary' };
+        return `<span class="badge bg-${map[s] || 'secondary'}">${esc(s)}</span>`;
+    };
+    body.innerHTML = rows.map((r) => `
+        <tr class="${r.status === 'active' ? 'table-warning' : ''}">
+            <td><code>${esc(r.pattern)}</code></td>
+            <td>${esc(r.cic_label)}</td>
+            <td>${statusBadge(r.status)}</td>
+            <td>${r.status === 'active' ? `${Number(r.elapsed_sec || 0).toFixed(1)}s` : '—'}</td>
+        </tr>`).join('');
+}
+
+let labPollTimer = null;
+
+function startLabPoll() {
+    stopLabPoll();
+    labPollTimer = setInterval(refreshLabStatus, 1500);
+}
+
+function stopLabPoll() {
+    if (labPollTimer) {
+        clearInterval(labPollTimer);
+        labPollTimer = null;
+    }
+}
+
+async function refreshLabStatus() {
+    const logEl = document.getElementById('labLog');
+    const badge = document.getElementById('labStatusBadge');
+    try {
+        const res = await fetch('/api/lab/status');
+        if (!res.ok) return;
+        const data = await res.json();
+        if (logEl && Array.isArray(data.log)) {
+            logEl.textContent = data.log.join('\n') || '—';
+            logEl.scrollTop = logEl.scrollHeight;
+        }
+        renderLabAttackTable(data.patterns_queue);
+        if (badge) {
+            badge.textContent = data.running ? 'running' : (data.last_error ? 'error' : 'idle');
+            badge.className = `badge ${data.running ? 'bg-success' : (data.last_error ? 'bg-danger' : 'bg-secondary')}`;
+        }
+        setLabToggleState(!!data.running);
+        if (data.last_error && !data.running) {
+            showInlineFeedback(data.last_error, 'danger', 'Lab traffic');
+        }
+        if (!data.running) stopLabPoll();
+    } catch {
+        /* ignore transient poll errors */
+    }
+}
+
+let nidsTestPollTimer = null;
+
+function setNidsTestToggleState(running) {
+    const btn = document.getElementById('opsBtnNidsTestToggle');
+    if (!btn) return;
+    btn.dataset.running = running ? 'true' : 'false';
+    btn.disabled = false;
+    if (running) {
+        btn.className = 'btn btn-danger btn-sm w-100';
+        btn.innerHTML = '<i class="bi bi-stop-fill"></i> Stop soak test';
+    } else {
+        btn.className = 'btn btn-success btn-sm w-100';
+        btn.innerHTML = '<i class="bi bi-play-fill"></i> Start soak test';
+    }
+}
+
+function startNidsTestPoll() {
+    stopNidsTestPoll();
+    nidsTestPollTimer = setInterval(refreshNidsTestStatus, 2000);
+}
+
+function stopNidsTestPoll() {
+    if (nidsTestPollTimer) {
+        clearInterval(nidsTestPollTimer);
+        nidsTestPollTimer = null;
+    }
+}
+
+function renderNidsTestCoverage(rows, activePattern) {
+    const body = document.getElementById('nidsTestCoverageBody');
+    if (!body) return;
+    if (!rows?.length) {
+        body.innerHTML = '<tr><td colspan="5" class="text-muted small">Start soak test to track all 13 attack patterns.</td></tr>';
+        return;
+    }
+    const yesNo = (v) => (v ? '<span class="badge bg-success">yes</span>' : '<span class="badge bg-secondary">no</span>');
+    body.innerHTML = rows.map((r) => `
+        <tr class="${r.pattern === activePattern ? 'table-warning' : ''}">
+            <td><code>${esc(r.pattern)}</code></td>
+            <td>${esc(r.cic_label)}</td>
+            <td>${yesNo(r.alerted_ml)}</td>
+            <td>${yesNo(r.alerted_suricata)}</td>
+            <td>${yesNo(r.completed)}</td>
+        </tr>`).join('');
+}
+
+async function refreshNidsTestStatus() {
+    const logEl = document.getElementById('nidsTestLog');
+    const badge = document.getElementById('nidsTestBadge');
+    try {
+        const res = await fetch('/api/nids-test/status');
+        if (!res.ok) return;
+        const data = await res.json();
+        const st = data.stats || {};
+        const al = st.alerts || {};
+        const set = (id, val) => {
+            const el = document.getElementById(id);
+            if (el) el.textContent = val;
+        };
+        set('nidsTestFlows', st.total_flows ?? '—');
+        set('nidsTestFindings', st.total_findings ?? '—');
+        set('nidsTestMl', al.ml ?? '—');
+        set('nidsTestSuri', al.suricata ?? '—');
+        set('nidsTestElapsed', data.elapsed_sec != null ? `${Number(data.elapsed_sec).toFixed(0)}s` : '—');
+        renderNidsTestCoverage(data.pattern_coverage, st.current_pattern);
+        if (logEl && Array.isArray(data.log)) {
+            logEl.textContent = data.log.slice(-40).join('\n') || '—';
+            logEl.scrollTop = logEl.scrollHeight;
+        }
+        if (badge) {
+            badge.textContent = data.running ? 'running' : (data.last_error ? 'error' : 'idle');
+            badge.className = `badge ${data.running ? 'bg-success' : (data.last_error ? 'bg-danger' : 'bg-secondary')}`;
+        }
+        setNidsTestToggleState(!!data.running);
+        if (data.session_id) {
+            sessionId = data.session_id;
+            window.sessionId = sessionId;
+        }
+        if (!data.running) stopNidsTestPoll();
+    } catch {
+        /* ignore */
+    }
+}
+
+async function startNidsSoakTest() {
+    const btn = document.getElementById('opsBtnNidsTestToggle');
+    const logEl = document.getElementById('nidsTestLog');
+    const mode = document.getElementById('nidsTestMode')?.value || 'suricata';
+    const iface = (document.getElementById('nidsTestIface')?.value || cap.iface?.value || sur.iface?.value || '').trim();
+    const withLab = document.getElementById('nidsTestWithLab')?.checked !== false;
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Starting…';
+    }
+    if (logEl) logEl.textContent = 'Starting NIDS soak test…';
+    try {
+        const res = await fetch('/api/nids-test/start', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ mode, interface: iface, with_lab: withLab, poll_sec: 5, rotate_sec: 12 }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+            const msg = data.hint ? `${data.error} — ${data.hint}` : (data.error || 'Failed to start');
+            if (logEl) logEl.textContent = msg;
+            await showNotice('Soak test failed', msg, 'danger');
+            setNidsTestToggleState(false);
+            return;
+        }
+        if (data.session_id) {
+            sessionId = data.session_id;
+            window.sessionId = sessionId;
+            resumeSession({ session_id: data.session_id, running: true });
+        }
+        setNidsTestToggleState(true);
+        await showNotice('Soak test started', data.message || 'Monitoring until stopped.', 'success');
+        startNidsTestPoll();
+        refreshNidsTestStatus();
+    } catch (err) {
+        await showNotice('Soak test failed', String(err), 'danger');
+        setNidsTestToggleState(false);
+    }
+}
+
+async function stopNidsSoakTest() {
+    const btn = document.getElementById('opsBtnNidsTestToggle');
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Stopping…';
+    }
+    try {
+        const res = await fetch('/api/nids-test/stop', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ stop_live: false }),
+        });
+        const data = await res.json();
+        stopNidsTestPoll();
+        setNidsTestToggleState(false);
+        await showNotice('Soak test stopped', data.message || 'Stopped.', 'info');
+        refreshNidsTestStatus();
+    } catch (err) {
+        await showNotice('Stop failed', String(err), 'danger');
+        setNidsTestToggleState(false);
+    }
+}
+
+async function toggleNidsSoakTest() {
+    const btn = document.getElementById('opsBtnNidsTestToggle');
+    if (btn?.dataset.running === 'true') await stopNidsSoakTest();
+    else await startNidsSoakTest();
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
     initActionModal();
+    initSectionNav();
     await loadConfig();
     await loadInterfaces();
 
@@ -962,6 +1592,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         refreshCapture();
         captureTimer = setInterval(refreshCapture, 5000);
     }
+    if (document.getElementById('socSensorHealth')) {
+        /* polled by live_soc.js */
+    }
     if (document.getElementById('mlCaptureBadge')) {
         syncEveFromCapture();
         setInterval(syncEveFromCapture, 5000);
@@ -972,14 +1605,63 @@ document.addEventListener('DOMContentLoaded', async () => {
             resumeSession(liveConfig.active_session);
         }
     }
+    document.getElementById('opsBtnLabToggle')?.addEventListener('click', toggleLabTraffic);
+    document.getElementById('opsBtnNidsTestToggle')?.addEventListener('click', toggleNidsSoakTest);
+    refreshNidsTestStatus();
+    document.getElementById('evePathInput')?.addEventListener('change', (e) => {
+        if (els.evePath) els.evePath.value = e.target.value;
+        const disp = document.getElementById('evePathDisplay');
+        if (disp) disp.textContent = e.target.value;
+    });
+    document.getElementById('btnImportEve')?.addEventListener('click', async () => {
+        const path = await importEveFile();
+        if (path) {
+            const inp = document.getElementById('evePathInput');
+            if (inp) inp.value = path;
+            if (els.evePath) els.evePath.value = path;
+            await showNotice('EVE imported', path, 'success');
+            await plugEveIntoMl(path);
+        }
+    });
+    document.getElementById('btnPlugEve')?.addEventListener('click', () => plugEveIntoMl());
+    document.querySelectorAll('#mlAlertFilters button').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            document.querySelectorAll('#mlAlertFilters button').forEach((b) => b.classList.remove('active'));
+            btn.classList.add('active');
+            window.alertSeverityFilter = btn.dataset.severity || '';
+            alertSince = 0;
+            if (typeof window.socLoadAlerts === 'function') window.socLoadAlerts();
+        });
+    });
+    refreshLabStatus();
+    document.getElementById('liveOpsFeedbackDismiss')?.addEventListener('click', hideInlineFeedback);
+    document.getElementById('liveInvestigatePanelHide')?.addEventListener('click', () => {
+        document.getElementById('liveInvestigatePanel')?.classList.add('d-none');
+    });
+    document.getElementById('liveOsintPanelHide')?.addEventListener('click', () => {
+        document.getElementById('liveOsintPanel')?.classList.add('d-none');
+    });
+    document.getElementById('liveThreatMapPanelHide')?.addEventListener('click', () => {
+        document.getElementById('liveThreatMapPanel')?.classList.add('d-none');
+    });
 });
 
 // ---------------------------------------------------------------------------
-// OSINT investigation offcanvas
+// OSINT investigation (inline panel on Live Operations, offcanvas elsewhere)
 // ---------------------------------------------------------------------------
 const investigateBody = document.getElementById('investigateBody');
-const investigatePanelEl = document.getElementById('investigatePanel');
-const investigatePanel = investigatePanelEl ? new bootstrap.Offcanvas(investigatePanelEl) : null;
+const investigatePanelEl = document.getElementById('liveInvestigatePanel');
+const investigateOffcanvasEl = document.getElementById('investigatePanel');
+const investigatePanel = investigateOffcanvasEl ? new bootstrap.Offcanvas(investigateOffcanvasEl) : null;
+
+function showInvestigatePanel() {
+    if (investigatePanelEl) {
+        investigatePanelEl.classList.remove('d-none');
+        investigatePanelEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        return;
+    }
+    investigatePanel?.show();
+}
 
 function renderVerdict(entry) {
     if (entry.results?.skipped) return `<span class="text-muted">${esc(entry.results.skipped)}</span>`;
@@ -1031,8 +1713,8 @@ function renderInvestigation(inv) {
 }
 
 async function investigateFinding(findingId) {
-    if (!findingId || !investigatePanel) return;
-    investigatePanel.show();
+    if (!findingId || !investigateBody) return;
+    showInvestigatePanel();
     renderInvestigation({ status: 'running' });
     try {
         await fetch(`/api/investigate/finding/${findingId}`, { method: 'POST' });

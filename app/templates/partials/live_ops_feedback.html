@@ -1,0 +1,20 @@
+<div id="liveOpsConfirm" class="alert alert-warning d-none mb-3" role="region" aria-live="polite">
+    <div class="d-flex flex-wrap justify-content-between align-items-start gap-2">
+        <div>
+            <strong id="liveOpsConfirmTitle"></strong>
+            <div id="liveOpsConfirmBody" class="small mt-1"></div>
+        </div>
+        <div class="d-flex gap-2 flex-shrink-0">
+            <button type="button" class="btn btn-danger btn-sm" id="liveOpsConfirmYes">Confirm</button>
+            <button type="button" class="btn btn-outline-secondary btn-sm" id="liveOpsConfirmNo">Cancel</button>
+        </div>
+    </div>
+</div>
+
+<div id="liveOpsFeedback" class="alert d-none mb-3" role="alert">
+    <div class="d-flex justify-content-between align-items-start gap-2">
+        <div id="liveOpsFeedbackBody" class="small mb-0" style="white-space:pre-wrap"></div>
+        <button type="button" class="btn-close" id="liveOpsFeedbackDismiss" aria-label="Dismiss"></button>
+    </div>
+    <div id="liveOpsFeedbackExtra" class="mt-2 small"></div>
+</div>

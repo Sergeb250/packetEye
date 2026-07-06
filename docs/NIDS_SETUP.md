@@ -107,3 +107,43 @@ above the threshold raise ML findings/alerts.
 ## Suricata
 
 See [SURICATA_SETUP.md](SURICATA_SETUP.md) for EVE JSON flow logging configuration.
+
+## Live Operations Center
+
+Open **Live Monitor** (`/live`) for the unified sensor console:
+
+- **Capture + ML**: Start capture from the Capture tab — ML attaches automatically. tcpdump mode scores Scapy flows; Suricata mode tails `eve.json`.
+- **External Suricata**: Running Suricata outside packetEye is auto-detected; EVE path is parsed from `suricata.yaml` when `AUTO_SYNC_EVE=true`.
+- **ML tab**: Import external `eve.json` (upload or path) and **Plug into ML** without restarting Suricata.
+- **SOC Overview**: Alert queue with severity filters, enhanced inspector (LLM attack classification when `ALERT_ENHANCED_ANALYSIS=true`), OSINT, mark false positive.
+- **Lab traffic**: Set `CAPTURE_LAB_ENABLED=true`, start capture+ML, then use the **Lab** tab — single Start/Stop toggle, live attack table, 12+ CIC-IDS2017-style patterns.
+- **NIDS soak test**: Rotates **all 13** CIC-style attack patterns, tracks per-pattern ML/Suricata alert coverage until stopped:
+  - **Dashboard**: Live Monitor → **Lab** tab → **NIDS + ML Soak Test** (coverage table)
+  - **CLI** (Linux/macOS/Git Bash / WSL):
+
+```bash
+chmod +x scripts/run_nids_soak_test.sh
+./scripts/run_nids_soak_test.sh --interface eth0     # all malicious patterns + monitor
+./scripts/run_nids_soak_test.sh --rotate 12          # seconds per pattern (default 12)
+./scripts/run_nids_soak_test.sh --no-lab             # real traffic only
+./scripts/run_nids_soak_test.sh --mode tcpdump --interface eth1
+PACKETEYE_URL=http://127.0.0.1:5050 ./scripts/run_nids_soak_test.sh
+```
+
+Requires `python run.py`, `LIVE_MONITOR_ENABLED=true`, and `CAPTURE_LAB_ENABLED=true` for synthetic attacks. Set `LAB_ROTATE_SEC=12` in `.env`.
+
+**Linux sensor:** Scapy + Suricata/tcpdump on mirror port; run as root if needed.
+
+**Windows:** External Suricata + `SURICATA_EVE_PATH` for monitoring; full malicious generation needs WSL/Linux.
+
+One full rotation ≈ 13 × 12s ≈ 2.5 minutes. Watch CLI `COVERAGE:` line or dashboard coverage table.
+
+```
+SCAPY_FLOW_IDLE_SEC=5
+LIVE_ML_TCPDUMP_ENABLED=true
+CAPTURE_LAB_ENABLED=true
+LAB_ROTATE_SEC=12
+AUTO_SYNC_EVE=true
+ALERT_ENHANCED_ANALYSIS=false
+LLM_LIVE_ALERT_SYNTHESIS=false
+```

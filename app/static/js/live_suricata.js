@@ -18,6 +18,7 @@
         monitorFilter: document.getElementById('surMonitorFilter'),
         btnMonitorPause: document.getElementById('btnSurMonitorPause'),
         btnMonitorClear: document.getElementById('btnSurMonitorClear'),
+        btnExport: document.getElementById('btnSurExport'),
         autoscroll: document.getElementById('chkSurMonitorAutoscroll'),
         btnPreflight: document.getElementById('btnSuricataPreflight'),
     };
@@ -136,6 +137,8 @@
         const tr = document.createElement('tr');
         tr.className = severityClass(row.severity);
         tr.dataset.id = row.id;
+        tr.style.cursor = 'pointer';
+        tr.title = 'Click for details';
         tr.innerHTML = `
             <td class="text-muted">${row.id}</td>
             <td class="font-monospace small">${fmtTime(row.timestamp)}</td>
@@ -143,10 +146,35 @@
             <td class="font-monospace small">${esc(fmtEndpoint(row.dst_ip, row.dst_port))}</td>
             <td><span class="badge text-bg-light border">${esc(row.protocol)}</span></td>
             <td class="text-end">${row.length ? row.length.toLocaleString() : '—'}</td>
-            <td class="small text-truncate" style="max-width:280px" title="${esc(row.info)}">${esc(row.info)}</td>
+            <td class="small text-truncate" style="max-width:220px" title="${esc(row.info)}">${esc(row.info)}</td>
             <td>${severityBadge(row.severity)}</td>
+            <td class="text-nowrap">
+                <button type="button" class="btn btn-outline-secondary btn-sm py-0 sur-act-inspect" title="Inspect"><i class="bi bi-eye"></i></button>
+                ${row.dst_ip ? `<button type="button" class="btn btn-outline-primary btn-sm py-0 sur-act-osint" data-ip="${esc(row.dst_ip)}" title="OSINT"><i class="bi bi-globe2"></i></button>` : ''}
+                <button type="button" class="btn btn-outline-secondary btn-sm py-0 sur-act-copy" title="Copy"><i class="bi bi-clipboard"></i></button>
+            </td>
         `;
         els.monitorBody.appendChild(tr);
+        tr.querySelector('.sur-act-inspect')?.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (typeof window.socShowEventDetail === 'function') window.socShowEventDetail(row);
+        });
+        tr.querySelector('.sur-act-osint')?.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const ip = e.target.closest('.sur-act-osint')?.dataset.ip;
+            const sid = window.sessionId || window.liveConfig?.active_session?.session_id;
+            if (ip && sid && window.openOsintForTarget) window.openOsintForTarget(sid, ip);
+        });
+        tr.querySelector('.sur-act-copy')?.addEventListener('click', (e) => {
+            e.stopPropagation();
+            navigator.clipboard?.writeText(JSON.stringify(row));
+        });
+        tr.addEventListener('click', () => {
+            if (typeof window.socShowEventDetail === 'function') {
+                window.socShowEventDetail(row);
+                if (window.livePage !== 'overview') window.location.href = '/live/overview';
+            }
+        });
         monitorRowCount += 1;
 
         while (els.monitorBody.rows.length > MAX_MONITOR_ROWS) {
@@ -268,6 +296,11 @@
         });
     }
     if (els.btnMonitorClear) els.btnMonitorClear.addEventListener('click', clearMonitor);
+    if (els.btnExport) {
+        els.btnExport.addEventListener('click', () => {
+            window.open(`/api/suricata/export?since=0&format=csv`, '_blank');
+        });
+    }
     if (els.monitorFilter) {
         els.monitorFilter.addEventListener('input', () => {
             /* re-filter would need row cache; filter applies to new rows only */

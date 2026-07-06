@@ -1,0 +1,31 @@
+<div id="liveInvestigatePanel" class="card mt-3 d-none">
+    <div class="card-header d-flex justify-content-between align-items-center py-2">
+        <span><i class="bi bi-search text-info"></i> Investigation</span>
+        <button type="button" class="btn btn-outline-secondary btn-sm" id="liveInvestigatePanelHide">Hide</button>
+    </div>
+    <div class="card-body" id="investigateBody">
+        <div class="empty-state text-muted small"><i class="bi bi-search"></i> Select Investigate on an alert.</div>
+    </div>
+</div>
+
+<div id="liveOsintPanel" class="card mt-3 d-none">
+    <div class="card-header d-flex justify-content-between align-items-center py-2">
+        <h6 class="mb-0" id="osintDetailTitle"><i class="bi bi-search text-info"></i> OSINT Detail</h6>
+        <button type="button" class="btn btn-outline-secondary btn-sm" id="liveOsintPanelHide">Hide</button>
+    </div>
+    <div class="card-body">
+        <div id="osintDetailVerdict" class="mb-3"></div>
+        <ul class="nav nav-pills mb-3 flex-wrap" id="osintDetailTabs" role="tablist"></ul>
+        <div class="tab-content" id="osintDetailTabContent"></div>
+    </div>
+</div>
+
+<div id="liveThreatMapPanel" class="card mt-3 d-none">
+    <div class="card-header d-flex justify-content-between align-items-center py-2">
+        <span><i class="bi bi-globe text-info"></i> Threat Map</span>
+        <button type="button" class="btn btn-outline-secondary btn-sm" id="liveThreatMapPanelHide">Hide</button>
+    </div>
+    <div class="card-body p-0">
+        <div id="liveThreatMapCanvas" style="height:360px;"></div>
+    </div>
+</div>
