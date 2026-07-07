@@ -78,7 +78,7 @@ class ZAIProvider(LLMProvider):
 
     label = "zai"
     DEFAULT_BASE_URL = "https://api.z.ai/api/paas/v4/"
-    DEFAULT_MODEL = "glm-4-flash"
+    DEFAULT_MODEL = "glm-4.7-flash"
 
     def __init__(
         self,
@@ -123,7 +123,7 @@ class NVIDIAProvider(LLMProvider):
 
     label = "nvidia"
     DEFAULT_BASE_URL = "https://integrate.api.nvidia.com/v1"
-    DEFAULT_MODEL = "deepseek-ai/deepseek-v4-pro"
+    DEFAULT_MODEL = "minimaxai/minimax-m3"
 
     def __init__(
         self,
@@ -231,12 +231,12 @@ class OpenRouterProvider(LLMProvider):
         return response.choices[0].message.content or "{}"
 
 
-def get_provider(config: dict) -> LLMProvider:
+def get_provider(config: dict, model_override: str | None = None) -> LLMProvider:
     provider = config.get("LLM_PROVIDER", "zai").lower()
     max_tokens = int(config.get("LLM_MAX_TOKENS", 512))
     timeout = float(config.get("LLM_TIMEOUT_SECONDS", DEFAULT_TIMEOUT_SECONDS))
 
-    if provider == "zai":
+    if provider == "zai" and not model_override:
         key = (config.get("ZAI_API_KEY") or "").strip()
         if not key:
             provider = "nvidia"
@@ -250,18 +250,32 @@ def get_provider(config: dict) -> LLMProvider:
             )
 
     api_key = config.get("LLM_API_KEY") or config.get("NVIDIA_API_KEY", "")
-    model = config.get("LLM_MODEL", NVIDIAProvider.DEFAULT_MODEL)
+    model = model_override or config.get("LLM_MODEL", NVIDIAProvider.DEFAULT_MODEL)
     base_url = config.get("NVIDIA_API_BASE", NVIDIAProvider.DEFAULT_BASE_URL)
 
-    if provider == "anthropic":
+    if provider == "anthropic" and not model_override:
         p = AnthropicProvider(api_key, model, timeout=timeout)
         p.max_tokens = max_tokens
         return p
-    if provider == "openai":
+    if provider == "openai" and not model_override:
         p = OpenAIProvider(api_key, model, timeout=timeout)
         p.max_tokens = max_tokens
         return p
     return NVIDIAProvider(api_key, model, base_url, max_tokens, timeout=timeout)
+
+
+def provider_for_model(config: dict, model_id: str, *, max_tokens: int | None = None) -> NVIDIAProvider:
+    """Build an NVIDIA NIM provider for a specific model (chat selector)."""
+    api_key = config.get("LLM_API_KEY") or config.get("NVIDIA_API_KEY", "")
+    timeout = float(config.get("LLM_TIMEOUT_SECONDS", DEFAULT_TIMEOUT_SECONDS))
+    tokens = max_tokens if max_tokens is not None else int(config.get("LLM_MAX_TOKENS", 512))
+    return NVIDIAProvider(
+        api_key,
+        model_id,
+        config.get("NVIDIA_API_BASE", NVIDIAProvider.DEFAULT_BASE_URL),
+        tokens,
+        timeout,
+    )
 
 
 def parse_json_response(text: str) -> dict:

@@ -71,6 +71,11 @@ def live_alerts():
     return redirect(url_for("main.live_ml"))
 
 
+@main_bp.route("/integrations")
+def integrations():
+    return render_template("integrations.html")
+
+
 @main_bp.route("/dashboard")
 def dashboard():
     recent = Analysis.query.order_by(Analysis.created_at.desc()).limit(6).all()

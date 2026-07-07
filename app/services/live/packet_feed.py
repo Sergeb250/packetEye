@@ -240,6 +240,14 @@ class LivePacketFeed:
             self._seq += 1
             row["id"] = self._seq
             self._buffer.append(row)
+        try:
+            from app.services.streams import get_packet_writer
+
+            writer = get_packet_writer()
+            if writer:
+                writer.write(row)
+        except Exception as exc:
+            logger.debug("Packet stream skip: %s", exc)
 
     def start(self, config: dict, mode: str, interface: str, eve_path: str | None = None) -> None:
         self.stop()

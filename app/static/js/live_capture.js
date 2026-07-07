@@ -19,7 +19,6 @@
 
     let sinceId = 0;
     let paused = false;
-    let pollTimer = null;
     let rowCount = 0;
     let lastRateTs = Date.now();
     let lastRateCount = 0;
@@ -154,10 +153,8 @@
 
     async function ensureFeedRunning() {
         try {
-            const res = await fetch('/api/capture/status');
-            if (!res.ok) return;
-            const s = await res.json();
-            if (s.running && !(s.live_feed || {}).running) {
+            const s = await LivePollHub.fetchJSON('/api/capture/status', 2500);
+            if (s?.running && !(s.live_feed || {}).running) {
                 /* feed starts with capture; if page opened mid-session, poll still works once feed catches up */
             }
         } catch {
@@ -193,12 +190,9 @@
     }
 
     document.addEventListener('DOMContentLoaded', () => {
-        ensureFeedRunning();
-        pollPackets();
-        pollTimer = setInterval(pollPackets, 800);
-    });
-
-    window.addEventListener('beforeunload', () => {
-        if (pollTimer) clearInterval(pollTimer);
+        if (LivePollHub.activeTab() === 'capture') ensureFeedRunning();
+        // 2.5s keeps the table lively without the old 800ms hammering; the
+        // hub also stops the poll entirely off the Traffic Capture page.
+        LivePollHub.register('capture-packets', pollPackets, { interval: 2500, tabs: ['capture'] });
     });
 })();

@@ -1,7 +1,9 @@
 {% extends "base.html" %}
 {% block title %}Live Operations{% endblock %}
 {% block head %}
+{% if live_page in ('overview', 'capture', 'suricata', 'ml') %}
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+{% endif %}
 <style>
 .live-ops-shell { min-height: calc(100vh - 120px); display: flex; flex-direction: column; }
 .live-ops-tab-content .tab-pane { padding-top: 0.75rem; }
@@ -34,39 +36,56 @@
     {% include "partials/live_ops_feedback.html" %}
 
     <div class="tab-content live-ops-tab-content" id="liveOpsTabContent">
-        <div class="tab-pane fade {% if live_page == 'overview' %}show active{% endif %}" id="tab-overview" role="tabpanel">
+        {% if live_page == 'overview' %}
+        <div class="tab-pane fade show active" id="tab-overview" role="tabpanel">
             {% include "partials/live_tab_overview.html" %}
         </div>
-        <div class="tab-pane fade {% if live_page == 'ai_triage' %}show active{% endif %}" id="tab-ai-triage" role="tabpanel">
+        {% elif live_page == 'ai_triage' %}
+        <div class="tab-pane fade show active" id="tab-ai-triage" role="tabpanel">
             {% include "partials/live_tab_ai_triage.html" %}
         </div>
-        <div class="tab-pane fade {% if live_page == 'capture' %}show active{% endif %}" id="tab-capture" role="tabpanel">
+        {% elif live_page == 'capture' %}
+        <div class="tab-pane fade show active" id="tab-capture" role="tabpanel">
             {% include "partials/live_tab_capture.html" %}
         </div>
-        <div class="tab-pane fade {% if live_page == 'suricata' %}show active{% endif %}" id="tab-suricata" role="tabpanel">
+        {% elif live_page == 'suricata' %}
+        <div class="tab-pane fade show active" id="tab-suricata" role="tabpanel">
             {% include "partials/live_tab_suricata.html" %}
         </div>
-        <div class="tab-pane fade {% if live_page == 'ml' %}show active{% endif %}" id="tab-ml" role="tabpanel">
+        {% elif live_page == 'ml' %}
+        <div class="tab-pane fade show active" id="tab-ml" role="tabpanel">
             {% include "partials/live_tab_ml.html" %}
         </div>
-        <div class="tab-pane fade {% if live_page == 'lab' %}show active{% endif %}" id="tab-lab" role="tabpanel">
+        {% elif live_page == 'lab' %}
+        <div class="tab-pane fade show active" id="tab-lab" role="tabpanel">
             {% include "partials/live_tab_lab.html" %}
         </div>
+        {% endif %}
     </div>
 
     {% include "partials/live_ops_inline_panels.html" %}
+    {% include "partials/escalation_compose_modal.html" %}
 </div>
 
 <script id="live-monitor-data" type="application/json">{{ live | tojson }}</script>
 <script>window.livePage = {{ live_page|tojson }};</script>
 {% endblock %}
 {% block scripts %}
+<script src="{{ url_for('static', filename='js/live_common.js') }}"></script>
+<script src="{{ url_for('static', filename='js/escalation_compose.js') }}"></script>
+{% if live_page == 'overview' %}
+<script src="{{ url_for('static', filename='js/live_soc.js') }}"></script>
+{% elif live_page == 'ai_triage' %}
+<script src="{{ url_for('static', filename='js/live_ai_triage.js') }}"></script>
+<script src="{{ url_for('static', filename='js/osint_detail.js') }}"></script>
+{% elif live_page == 'capture' %}
+<script src="{{ url_for('static', filename='js/live_capture.js') }}"></script>
+{% elif live_page == 'suricata' %}
+<script src="{{ url_for('static', filename='js/live_suricata.js') }}"></script>
+{% endif %}
+{% if live_page in ('overview', 'capture', 'suricata', 'ml') %}
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="{{ url_for('static', filename='js/threat_map.js') }}"></script>
 <script src="{{ url_for('static', filename='js/osint_detail.js') }}"></script>
-<script src="{{ url_for('static', filename='js/live_common.js') }}"></script>
-<script src="{{ url_for('static', filename='js/live_soc.js') }}"></script>
-<script src="{{ url_for('static', filename='js/live_ai_triage.js') }}"></script>
-<script src="{{ url_for('static', filename='js/live_capture.js') }}"></script>
-<script src="{{ url_for('static', filename='js/live_suricata.js') }}"></script>
+{% endif %}
 {% endblock %}

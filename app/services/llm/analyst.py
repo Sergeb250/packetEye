@@ -10,9 +10,10 @@ from app.services.llm.prompts import (
     EXECUTIVE_SUMMARY_PROMPT,
     FINDING_PROMPT,
     HUNT_HYPOTHESES_PROMPT,
-    SYSTEM_ANALYST,
+    SYSTEM_REPORT_ANALYST,
 )
 from app.services.llm.ensemble import get_llm_ensemble
+from app.services.llm.tokens import with_tier
 
 logger = logging.getLogger(__name__)
 
@@ -23,8 +24,12 @@ class LLMAnalyst:
     MAX_CONSECUTIVE_FAILURES = 2
 
     def __init__(self, config: dict):
-        self.config = config
-        self.ensemble = get_llm_ensemble(config)
+        report_cfg = with_tier(dict(config), "report")
+        report_cfg["LLM_MAX_TOKENS"] = int(
+            config.get("LLM_REPORT_MAX_TOKENS", report_cfg.get("LLM_MAX_TOKENS", 2048))
+        )
+        self.config = report_cfg
+        self.ensemble = get_llm_ensemble(report_cfg)
         self.max_calls = int(config.get("LLM_MAX_CALLS_PER_ANALYSIS", 25))
         self.enabled = config.get("LLM_ENABLED", True)
         self._call_count = 0
@@ -100,7 +105,9 @@ class LLMAnalyst:
                 mitre_tactic=finding.mitre_tactic or "",
                 mitre_technique=finding.mitre_technique or "",
             )
-            result = self._cached_or_call(f"finding:{finding.id}", user, SYSTEM_ANALYST, user, 0.2)
+            result = self._cached_or_call(
+                f"finding:{finding.id}", user, SYSTEM_REPORT_ANALYST, user, 0.2
+            )
             if result:
                 finding.llm_explanation = result.get("explanation", finding.description)
                 finding.recommendation = result.get("recommendation", finding.recommendation)
@@ -137,7 +144,9 @@ class LLMAnalyst:
             findings=json.dumps(findings_summary),
             malicious_observables=[o.value for o in malicious[:10]],
         )
-        result = self._cached_or_call(f"exec:{analysis_id}", user, SYSTEM_ANALYST, user, 0.3)
+        result = self._cached_or_call(
+            f"exec:{analysis_id}", user, SYSTEM_REPORT_ANALYST, user, 0.3
+        )
         return result.get("summary", "Analysis complete. Review findings for details.")
 
     def generate_hunt_hypotheses(self, analysis_id: str) -> list:
@@ -148,5 +157,7 @@ class LLMAnalyst:
             findings=json.dumps([f.to_dict() for f in findings], default=str)[:3000],
             enrichment=json.dumps([o.to_dict() for o in obs], default=str)[:2000],
         )
-        result = self._cached_or_call(f"hunt:{analysis_id}", user, SYSTEM_ANALYST, user, 0.5)
+        result = self._cached_or_call(
+            f"hunt:{analysis_id}", user, SYSTEM_REPORT_ANALYST, user, 0.5
+        )
         return result.get("hypotheses", [])

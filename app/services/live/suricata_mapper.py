@@ -41,7 +41,7 @@ def eve_flow_to_flow_dict(eve_event: dict, flow_id: str | None = None) -> dict |
     proto = str(eve_event.get("proto") or "TCP").upper()
     dst_ip = str(eve_event.get("dest_ip") or eve_event.get("dst_ip") or "")
 
-    return {
+    flow_dict = {
         "id": flow_id or eve_event.get("flow_id") or eve_event.get("tx_id"),
         "src_ip": str(eve_event.get("src_ip") or ""),
         "dst_ip": dst_ip,
@@ -61,6 +61,19 @@ def eve_flow_to_flow_dict(eve_event: dict, flow_id: str | None = None) -> dict |
         "fwd_iat_mean": 0.0,
         "is_external_dst": is_external_ip(dst_ip),
     }
+
+    # EVE flow events carry TCP flag presence booleans. Map only the
+    # handshake-ish flags whose CIC counts are also ~0/1 per flow — a
+    # SYN-without-ACK signature is exactly what distinguishes port scans.
+    # PSH/ACK counts grow with flow length, so booleans would mislead there;
+    # those fall back to training medians in the full feature builder.
+    tcp_info = eve_event.get("tcp") or {}
+    if isinstance(tcp_info, dict) and tcp_info:
+        for eve_flag, key in (("syn", "syn_count"), ("fin", "fin_count"), ("rst", "rst_count")):
+            if eve_flag in tcp_info:
+                flow_dict[key] = 1 if tcp_info.get(eve_flag) else 0
+
+    return flow_dict
 
 
 # Suricata alert severity: 1 is most severe.

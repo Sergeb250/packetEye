@@ -11,8 +11,11 @@ from sklearn.ensemble import IsolationForest
 from app.services.detection.features import (
     FEATURE_NAMES,
     build_feature_matrix,
-    load_feature_schema,
-    validate_feature_schema,
+    build_full_feature_matrix,
+    load_feature_fill_values,
+    load_feature_schema,  # noqa: F401 — re-exported for existing callers
+    load_feature_schema_info,
+    validate_feature_schema,  # noqa: F401 — re-exported for existing callers
 )
 
 logger = logging.getLogger(__name__)
@@ -146,15 +149,29 @@ class MLEngine:
         self.model = None
         self.scaler = None
         self.feature_names = list(FEATURE_NAMES)
+        self.feature_set = "legacy"
+        self.fill_values: dict = {}
         self.calibrator = ScoreCalibrator.load(calibration_path)
 
         if schema_path and schema_path.exists():
             try:
-                self.feature_names = load_feature_schema(schema_path)
+                info = load_feature_schema_info(schema_path)
+                self.feature_names = info["feature_names"]
+                self.feature_set = info["feature_set"]
             except ValueError as exc:
                 if strict_schema:
                     raise
                 logger.warning("Feature schema validation failed: %s", exc)
+            if self.feature_set == "full":
+                self.fill_values = load_feature_fill_values(
+                    Path(schema_path).with_name("feature_fill_values.json")
+                )
+                if not self.fill_values:
+                    logger.warning(
+                        "Full-feature schema without feature_fill_values.json — "
+                        "non-derivable live features score as 0 instead of the "
+                        "training median. Retrain with train_baseline.py --feature-set full."
+                    )
 
         if model_path and model_path.exists():
             if scaler_path and not scaler_path.exists():
@@ -213,7 +230,10 @@ class MLEngine:
     def _score_batch(self, sample: list) -> list[dict]:
         if not sample:
             return []
-        features_df = build_feature_matrix(sample)
+        if self.feature_set == "full":
+            features_df = build_full_feature_matrix(sample, self.fill_values)
+        else:
+            features_df = build_feature_matrix(sample)
         if features_df.empty:
             return []
 

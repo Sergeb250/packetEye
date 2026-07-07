@@ -6,7 +6,6 @@
 
     const store = { alerts: [], events: [], selectedId: null, filterSeverity: '', filterSource: '', triageByConn: {} };
     let streamSince = 0;
-    let streamTimer = null;
 
     function esc(v) {
         const d = document.createElement('div');
@@ -231,6 +230,7 @@
         }
         parts.push(`<a href="/live/ml" class="btn btn-outline-secondary btn-sm"><i class="bi bi-cpu"></i> ML</a>`);
         parts.push(`<button type="button" class="btn btn-info btn-sm btn-soc-ai"><i class="bi bi-robot"></i> Ask AI</button>`);
+        parts.push(`<button type="button" class="btn btn-outline-danger btn-sm btn-soc-escalate"><i class="bi bi-envelope-exclamation"></i> Escalate</button>`);
         return parts.join(' ');
     }
 
@@ -254,6 +254,7 @@
                 document.getElementById('socInspectorCard')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
             }
             window.openOsintForTarget(sid, ip, {
+                live: true,
                 alertContext: ctx,
                 onComplete: (data, aiSummary) => {
                     if (!inspector) return;
@@ -291,6 +292,7 @@
                     });
                     inspector.querySelector('#socOsintMoreDetail')?.addEventListener('click', () => {
                         window.openOsintForTarget(sid, ip, {
+                            live: true,
                             alertContext: ctx,
                             detailLevel: 'detailed',
                             onComplete: (d, ai) => {
@@ -335,12 +337,21 @@
             const sid = window.sessionId || liveConfig?.active_session?.session_id;
             if (!window.openChatWithContext) return;
             window.openChatWithContext(
-                'Analyze this live SOC item using all JSON context. Summarize the threat, use markdown tables for IOCs/timeline, and add a mermaid diagram if it clarifies the traffic path.',
+                'Quick take on this live alert.',
                 sid,
                 ctx.finding_id || null,
                 { type: ctx.event_type ? 'live_event' : 'live_alert', raw: ctx, raw_event: ctx.raw_event || null },
                 ctx.flow_id || null,
             );
+        });
+        container.querySelector('.btn-soc-escalate')?.addEventListener('click', () => {
+            const sid = window.sessionId || liveConfig?.active_session?.session_id;
+            if (!window.openEscalationCompose) return;
+            window.openEscalationCompose({
+                context_type: 'alert',
+                session_id: sid,
+                alert_id: ctx.finding_id || ctx.id,
+            });
         });
     }
 
@@ -498,8 +509,8 @@
         if (!el) return;
         try {
             const [cap, sur] = await Promise.all([
-                fetch('/api/capture/status').then((r) => r.json()),
-                fetch('/api/suricata/status').then((r) => r.json()),
+                LivePollHub.fetchJSON('/api/capture/status', 2500).then((d) => d || {}),
+                LivePollHub.fetchJSON('/api/suricata/status', 2500).then((d) => d || {}),
             ]);
             const capOk = cap.running;
             const surOk = sur.running;
@@ -574,13 +585,12 @@
     window.socLoadAlerts = loadAllAlerts;
 
     document.addEventListener('DOMContentLoaded', () => {
-        refreshSensorHealth();
-        pollEventStream();
         loadAllAlerts();
-        pollTriageLink();
-        streamTimer = setInterval(pollEventStream, 2000);
-        setInterval(refreshSensorHealth, 8000);
-        setInterval(pollTriageLink, 5000);
+        // Hub gates these to the SOC Console page — every other /live/* page
+        // has this pane hidden, so polling it there was pure waste.
+        LivePollHub.register('soc-stream', pollEventStream, { interval: 3000, tabs: ['overview'] });
+        LivePollHub.register('soc-health', refreshSensorHealth, { interval: 8000, tabs: ['overview'] });
+        LivePollHub.register('soc-triage-link', pollTriageLink, { interval: 5000, tabs: ['overview'] });
         document.querySelectorAll('#socAlertFilters button').forEach((btn) => {
             btn.addEventListener('click', () => {
                 document.querySelectorAll('#socAlertFilters button').forEach((b) => b.classList.remove('active'));
@@ -594,7 +604,4 @@
         });
     });
 
-    window.addEventListener('beforeunload', () => {
-        if (streamTimer) clearInterval(streamTimer);
-    });
 })();

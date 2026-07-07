@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+{% block title %}Integrations{% endblock %}
+{% block content %}
+<div class="dashboard-hero mb-4">
+    <div class="d-flex flex-wrap justify-content-between align-items-start gap-3">
+        <div>
+            <h2 class="mb-1"><i class="bi bi-plug text-info"></i> Integrations</h2>
+            <p class="text-muted mb-0 small">Push live alerts to Discord on your phone — filter by severity, source, and AI status.</p>
+        </div>
+    </div>
+</div>
+
+<div id="integrationsFeedback" class="alert d-none" role="alert"></div>
+
+<div class="row g-4">
+    <div class="col-lg-8">
+        <div class="card soc-panel">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span><i class="bi bi-discord text-primary"></i> Discord Alerts</span>
+                <div class="form-check form-switch mb-0">
+                    <input class="form-check-input" type="checkbox" id="discordEnabled">
+                    <label class="form-check-label small" for="discordEnabled">Enabled</label>
+                </div>
+            </div>
+            <div class="card-body">
+                <div class="mb-3">
+                    <label class="form-label small" for="discordUrl">Webhook URL</label>
+                    <input type="url" class="form-control font-monospace" id="discordUrl"
+                           placeholder="https://discord.com/api/webhooks/…" autocomplete="off">
+                    <div class="form-text" id="discordUrlHint">Paste your Discord channel webhook URL. Saved locally on the server.</div>
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label small">Severities</label>
+                    <div class="d-flex flex-wrap gap-2" id="discordSeverities">
+                        <label class="form-check form-check-inline"><input class="form-check-input filter-all" type="checkbox" data-group="severities" value="all"> All</label>
+                        <label class="form-check form-check-inline"><input class="form-check-input filter-item" type="checkbox" data-group="severities" value="info"> Info</label>
+                        <label class="form-check form-check-inline"><input class="form-check-input filter-item" type="checkbox" data-group="severities" value="low"> Low</label>
+                        <label class="form-check form-check-inline"><input class="form-check-input filter-item" type="checkbox" data-group="severities" value="medium"> Medium</label>
+                        <label class="form-check form-check-inline"><input class="form-check-input filter-item" type="checkbox" data-group="severities" value="high"> High</label>
+                        <label class="form-check form-check-inline"><input class="form-check-input filter-item" type="checkbox" data-group="severities" value="critical"> Critical</label>
+                    </div>
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label small">Sources</label>
+                    <div class="d-flex flex-wrap gap-2" id="discordSources">
+                        <label class="form-check form-check-inline"><input class="form-check-input filter-all" type="checkbox" data-group="sources" value="all"> All</label>
+                        <label class="form-check form-check-inline"><input class="form-check-input filter-item" type="checkbox" data-group="sources" value="ml"> ML</label>
+                        <label class="form-check form-check-inline"><input class="form-check-input filter-item" type="checkbox" data-group="sources" value="suricata"> Suricata</label>
+                        <label class="form-check form-check-inline"><input class="form-check-input filter-item" type="checkbox" data-group="sources" value="correlation"> Correlation</label>
+                        <label class="form-check form-check-inline"><input class="form-check-input filter-item" type="checkbox" data-group="sources" value="llm"> AI / LLM</label>
+                    </div>
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label small">AI status <span class="text-muted">(LLM alerts only)</span></label>
+                    <div class="d-flex flex-wrap gap-2" id="discordAiStatuses">
+                        <label class="form-check form-check-inline"><input class="form-check-input filter-all" type="checkbox" data-group="ai_statuses" value="all"> All</label>
+                        <label class="form-check form-check-inline"><input class="form-check-input filter-item" type="checkbox" data-group="ai_statuses" value="true_positive"> TP</label>
+                        <label class="form-check form-check-inline"><input class="form-check-input filter-item" type="checkbox" data-group="ai_statuses" value="true_negative"> TN</label>
+                        <label class="form-check form-check-inline"><input class="form-check-input filter-item" type="checkbox" data-group="ai_statuses" value="false_positive"> FP</label>
+                        <label class="form-check form-check-inline"><input class="form-check-input filter-item" type="checkbox" data-group="ai_statuses" value="benign"> Benign</label>
+                        <label class="form-check form-check-inline"><input class="form-check-input filter-item" type="checkbox" data-group="ai_statuses" value="open"> Open</label>
+                    </div>
+                </div>
+
+                <div class="mb-4">
+                    <label class="form-label small" for="discordRateLimit">Rate limit (notifications / minute)</label>
+                    <input type="number" class="form-control form-control-sm" id="discordRateLimit" min="1" max="60" value="10" style="max-width:120px">
+                </div>
+
+                <div class="d-flex flex-wrap gap-2">
+                    <button type="button" class="btn btn-info btn-sm" id="btnSaveDiscord"><i class="bi bi-save"></i> Save</button>
+                    <button type="button" class="btn btn-outline-info btn-sm" id="btnTestDiscord"><i class="bi bi-send"></i> Send test</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-4">
+        <div class="card soc-panel mb-3">
+            <div class="card-header"><i class="bi bi-info-circle"></i> Setup</div>
+            <div class="card-body small text-muted">
+                <ol class="mb-0 ps-3">
+                    <li class="mb-2">In Discord: channel settings → Integrations → Webhooks → New Webhook</li>
+                    <li class="mb-2">Copy the webhook URL and paste it above</li>
+                    <li class="mb-2">Choose which alerts to receive on mobile</li>
+                    <li>Click <strong>Send test</strong> to verify</li>
+                </ol>
+            </div>
+        </div>
+
+        <div class="card soc-panel">
+            <div class="card-header">Other integrations</div>
+            <div class="card-body small">
+                <div class="d-flex justify-content-between mb-2">
+                    <span>LLM provider</span>
+                    <span class="badge bg-secondary" id="statusLlm">—</span>
+                </div>
+                <div class="d-flex justify-content-between mb-2">
+                    <span>OSINT keys</span>
+                    <span class="badge bg-secondary" id="statusOsint">—</span>
+                </div>
+                <div class="d-flex justify-content-between">
+                    <span>Escalation email</span>
+                    <span class="badge bg-secondary" id="statusSmtp">—</span>
+                </div>
+                <p class="text-muted mt-3 mb-0">LLM, OSINT, and SMTP are configured via <code>.env</code>.</p>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/integrations.js') }}"></script>
+{% endblock %}

@@ -10,6 +10,7 @@ from sqlalchemy import func
 
 from app.extensions import db
 from app.models.analysis import Analysis, Finding
+from app.services.live.webhook_notifier import get_webhook_notifier
 
 
 def _load_json(path: Path) -> dict | list | None:
@@ -178,20 +179,19 @@ def build_live_monitor_context(config: dict) -> dict[str, Any]:
     import os
 
     from app.services.live.monitor import monitor_status
+    from app.services.streams import get_session_store
 
     model_path = Path(config.get("ML_MODEL_PATH", ""))
     scaler_path = Path(config.get("ML_SCALER_PATH", ""))
     eve_default = str(config.get("SURICATA_EVE_PATH") or "")
     eve_path = Path(eve_default) if eve_default else None
 
-    latest_live = (
-        Analysis.query.filter_by(source="live")
-        .order_by(Analysis.created_at.desc())
-        .first()
-    )
+    store = get_session_store()
+    recent = store.list_recent(limit=1) if store else []
+    latest_live = recent[0] if recent else None
     active = None
     if latest_live:
-        status = monitor_status(latest_live.id)
+        status = monitor_status(latest_live["id"])
         if status.get("running"):
             active = status
 
@@ -253,12 +253,12 @@ def build_live_monitor_context(config: dict) -> dict[str, Any]:
         "capture_interface": str(config.get("CAPTURE_INTERFACE") or ""),
         "suricata_allow_loopback": bool(config.get("SURICATA_ALLOW_LOOPBACK")),
         "enrichment_mode": str(config.get("ENRICHMENT_MODE") or "on_investigate"),
-        "webhook_enabled": bool(config.get("ALERT_WEBHOOK_URL")),
+        "webhook_enabled": get_webhook_notifier(config) is not None,
         "chatbot_enabled": bool(config.get("CHATBOT_ENABLED", True)),
         "auto_sync_eve": bool(config.get("AUTO_SYNC_EVE", True)),
         "alert_enhanced_analysis": bool(config.get("ALERT_ENHANCED_ANALYSIS")),
         "active_session": active,
-        "latest_session_id": latest_live.id if latest_live else None,
+        "latest_session_id": latest_live["id"] if latest_live else None,
     }
 
 

@@ -5,12 +5,12 @@ import logging
 import numpy as np
 import pandas as pd
 
-from app.services.detection.features import FEATURE_NAMES, build_feature_matrix_from_cic
+from app.services.detection.features import build_cic_matrix, feature_names_for
 
 logger = logging.getLogger(__name__)
 
 
-def clean_cic_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+def clean_cic_dataframe(df: pd.DataFrame, feature_set: str = "legacy") -> pd.DataFrame:
     """Drop duplicates, infinities, and rows with missing feature values."""
     initial = len(df)
     df = df.drop_duplicates()
@@ -22,8 +22,8 @@ def clean_cic_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         if label_col != "Label":
             df["Label"] = df[label_col]
 
-    feature_df = build_feature_matrix_from_cic(df)
-    mask = feature_df[FEATURE_NAMES].notna().all(axis=1)
+    feature_df = build_cic_matrix(df, feature_set)
+    mask = feature_df[feature_names_for(feature_set)].notna().all(axis=1)
     df = df.iloc[mask.to_numpy()].reset_index(drop=True)
 
     logger.info("Cleaned CIC data: %d -> %d rows", initial, len(df))

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Sweep calibrated ML anomaly thresholds against CIC-IDS2017 BENIGN vs attack flows."""
 
+import argparse
 import json
 import logging
 import sys
@@ -12,7 +13,11 @@ import numpy as np
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from app.services.detection.features import build_feature_matrix_from_cic, load_feature_schema
+from app.services.detection.features import (
+    build_cic_matrix,
+    feature_set_of,
+    load_feature_schema_info,
+)
 from app.services.detection.ml_engine import ScoreCalibrator
 from scripts.cic_loader import load_cic_flows
 from scripts.cic_preprocess import clean_cic_dataframe, filter_benign, is_attack_label
@@ -32,16 +37,27 @@ def run_threshold_tuning(
     sample_size: int = DEFAULT_SAMPLE_SIZE,
     random_state: int = 42,
     output_path: Path | None = None,
+    feature_set: str = "auto",
 ) -> dict:
     """Sweep calibrated 0-10 thresholds; recommend the best-F1 point.
 
     The recommendation maximizes F1 on a labeled sample subject to the benign
     false-positive rate staying under MAX_BENIGN_FP_RATE; if no threshold
     satisfies the cap, the unconstrained best-F1 threshold is used.
+
+    feature_set "auto" follows the saved feature_schema.json (or the passed
+    feature_names) so the sweep always matches the trained model.
     """
     model = model or joblib.load(ML_DIR / "isolation_forest_base.pkl")
     scaler = scaler or joblib.load(ML_DIR / "feature_scaler.pkl")
-    feature_names = feature_names or load_feature_schema(ML_DIR / "feature_schema.json")
+    if feature_names is None:
+        info = load_feature_schema_info(ML_DIR / "feature_schema.json")
+        feature_names = info["feature_names"]
+        if feature_set == "auto":
+            feature_set = info["feature_set"]
+    elif feature_set == "auto":
+        feature_set = feature_set_of(feature_names)
+    logger.info("Tuning with feature_set=%s (%d features)", feature_set, len(feature_names))
     calibrator = ScoreCalibrator.load(ML_DIR / "score_calibration.json")
     if not calibrator.is_calibrated:
         logger.warning(
@@ -49,11 +65,13 @@ def run_threshold_tuning(
             "Retrain with scripts/train_baseline.py for calibrated scores."
         )
 
-    all_flows = clean_cic_dataframe(load_cic_flows(day=None))
+    all_flows = clean_cic_dataframe(
+        load_cic_flows(day=None, feature_set=feature_set), feature_set=feature_set
+    )
     benign = filter_benign(all_flows)
 
     def scores_for(df):
-        X = build_feature_matrix_from_cic(df)[feature_names].values.astype(float)
+        X = build_cic_matrix(df, feature_set)[feature_names].values.astype(float)
         raw = model.decision_function(scaler.transform(X))
         return calibrator.normalize_array(raw)
 
@@ -111,7 +129,16 @@ def run_threshold_tuning(
 
 
 def main():
-    run_threshold_tuning()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--feature-set",
+        choices=["auto", "legacy", "full"],
+        default="auto",
+        help="auto follows the saved feature_schema.json",
+    )
+    parser.add_argument("--sample-size", type=int, default=DEFAULT_SAMPLE_SIZE)
+    args = parser.parse_args()
+    run_threshold_tuning(feature_set=args.feature_set, sample_size=args.sample_size)
 
 
 if __name__ == "__main__":

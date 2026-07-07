@@ -25,6 +25,13 @@ _MAX_CONCURRENT = int(__import__("os").environ.get("LLM_MAX_CONCURRENT", "1"))
 _MIN_INTERVAL = float(__import__("os").environ.get("LLM_MIN_CALL_INTERVAL_SEC", "0.75"))
 _semaphore = threading.Semaphore(_MAX_CONCURRENT)
 
+# Credit exhaustion (OpenRouter 402) does not clear in seconds — park the
+# provider instead of hammering it on every live packet.
+_CREDIT_BACKOFF_SECONDS = float(__import__("os").environ.get("LLM_402_BACKOFF_SECONDS", "1800"))
+# Never sleep a caller for the whole backoff window; long waits belong to
+# is_provider_blocked() skipping, not to blocking request/live threads.
+_MAX_BACKOFF_SLEEP = 8.0
+
 
 def _provider_key(provider_label: str) -> str:
     label = (provider_label or "").lower()
@@ -48,24 +55,35 @@ def wait_if_backoff(provider_label: str = "nvidia") -> None:
     with _lock:
         until = _backoff_until.get(key, 0.0)
     if until > time.monotonic():
-        delay = until - time.monotonic()
+        delay = min(until - time.monotonic(), _MAX_BACKOFF_SLEEP)
         logger.debug("LLM backoff %s sleeping %.1fs", key, delay)
         time.sleep(delay)
+
+
+def is_provider_blocked(provider_label: str) -> bool:
+    """True while the provider sits in a backoff window — callers should skip it."""
+    key = _provider_key(provider_label)
+    with _lock:
+        return _backoff_until.get(key, 0.0) > time.monotonic()
 
 
 def note_failure(provider_label: str, exc: Exception | str) -> float:
     """Record provider failure; return suggested retry delay seconds."""
     msg = str(exc).lower()
+    key = _provider_key(provider_label)
     delay = 0.0
     if "429" in msg or "too many requests" in msg:
         delay = 10.0
     elif "402" in msg or "credits" in msg or "max_tokens" in msg:
-        delay = 5.0
-        match = re.search(r"can only afford (\d+)", msg)
-        if match:
+        if re.search(r"can only afford (\d+)", msg):
+            # Provider retries once with a reduced token budget — keep the
+            # window short so that retry is not blocked.
             delay = 2.0
+        elif key == "openrouter" and ("402" in msg or "credits" in msg):
+            delay = _CREDIT_BACKOFF_SECONDS
+        else:
+            delay = 5.0
     if delay:
-        key = _provider_key(provider_label)
         with _lock:
             _backoff_until[key] = time.monotonic() + delay
         logger.warning("LLM %s backoff %.0fs after: %s", key, delay, str(exc)[:120])

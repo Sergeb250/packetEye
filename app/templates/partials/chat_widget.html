@@ -5,7 +5,8 @@
     <i class="bi bi-robot"></i>
 </button>
 <div class="offcanvas offcanvas-end" tabindex="-1" id="chatPanel" style="width: 420px;"
-     data-analysis-id="{{ analysis.id if analysis is defined and analysis else '' }}">
+     data-analysis-id="{{ analysis.id if analysis is defined and analysis else '' }}"
+     {% if analysis is defined and analysis %}data-report-page="true"{% endif %}>
     <div class="offcanvas-header border-bottom">
         <h5 class="offcanvas-title"><i class="bi bi-robot text-info"></i> SOC AI Assistant</h5>
         <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
@@ -14,8 +15,8 @@
         <div id="chatMessages" class="flex-grow-1 overflow-auto p-3">
             <div class="chat-msg chat-ai">
                 <div class="chat-bubble chat-markdown">
-                    <p>I'm your <strong>SOC analyst assistant</strong>. I receive <strong>full JSON context</strong> — flows, alerts, OSINT, and capture metadata.</p>
-                    <p>Ask about findings, traffic patterns, or <em>what to do next</em>. I'll use <strong>tables</strong> and <strong>diagrams</strong> when they help.</p>
+                    <p>I'm your <strong>SOC analyst assistant</strong>. I give <strong>brief answers</strong> by default — ask for more detail, diagrams, or a full playbook anytime.</p>
+                    <p>On report pages I include <strong>tables</strong> and <strong>mermaid diagrams</strong> when helpful. Pick a model below to compare NIM endpoints.</p>
                 </div>
             </div>
         </div>
@@ -25,6 +26,9 @@
                 <button class="btn btn-outline-secondary btn-sm chat-suggest">What should I do first?</button>
                 <button class="btn btn-outline-secondary btn-sm chat-suggest">Explain the ML anomalies</button>
             </div>
+            <select id="chatModel" class="form-select form-select-sm mb-2 chat-model-select" title="LLM model">
+                <option value="">Loading models…</option>
+            </select>
             <form id="chatForm" class="d-flex gap-2">
                 <input type="text" id="chatInput" class="form-control form-control-sm"
                        placeholder="Ask the SOC assistant…" autocomplete="off">

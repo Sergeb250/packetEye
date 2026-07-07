@@ -1,12 +1,10 @@
 """Celery tasks for live NIDS monitoring."""
 
 import logging
-import uuid
-from datetime import datetime, timezone
 
-from app.extensions import celery_app, db
-from app.models.analysis import Analysis
+from app.extensions import celery_app
 from app.services.live.monitor import start_monitor, stop_monitor
+from app.services.streams import get_session_store
 
 logger = logging.getLogger(__name__)
 
@@ -29,26 +27,12 @@ def create_live_session(
     eve_path: str | None = None,
     interface: str | None = None,
     capture_source: str = "suricata",
-) -> Analysis:
-    session_id = str(uuid.uuid4())
-    eve = eve_path or config.get("SURICATA_EVE_PATH", "")
-    label = interface or ("scapy" if capture_source == "scapy" else "suricata")
-    analysis = Analysis(
-        id=session_id,
-        filename=f"live-{label}",
-        file_path=str(eve) if capture_source != "scapy" else f"scapy://{interface or 'eth0'}",
-        analysis_name=f"Live NIDS {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')}",
-        source="live",
-        status="analyzing",
-        progress_pct=10,
-        summary_json={
-            "interface": interface,
-            "eve_path": eve,
-            "live": True,
-            "capture_source": capture_source,
-            "capture_mode": capture_source if capture_source == "scapy" else "suricata",
-        },
+) -> dict:
+    store = get_session_store()
+    if not store:
+        raise RuntimeError("Live session store not initialized")
+    return store.create(
+        eve_path=eve_path or config.get("SURICATA_EVE_PATH", ""),
+        interface=interface,
+        capture_source=capture_source,
     )
-    db.session.add(analysis)
-    db.session.commit()
-    return analysis

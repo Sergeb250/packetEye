@@ -18,6 +18,11 @@ TIERS = {
         "LLM_SECONDARY_MAX_TOKENS": 768,
         "OPENROUTER_MAX_TOKENS": 512,
     },
+    "report": {
+        "LLM_MAX_TOKENS": 2048,
+        "LLM_SECONDARY_MAX_TOKENS": 1536,
+        "OPENROUTER_MAX_TOKENS": 1024,
+    },
 }
 
 

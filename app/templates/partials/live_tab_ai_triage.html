@@ -1,145 +1,140 @@
-<div class="ai-triage-dashboard">
-    <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
-        <div>
-            <h5 class="mb-1"><i class="bi bi-robot text-info"></i> AI Packet Triage</h5>
-            <p class="text-muted small mb-0">3-model live analysis — Z.ai GLM primary, NVIDIA + OpenRouter fallbacks. All outcomes logged.</p>
-        </div>
-        <div class="d-flex flex-wrap align-items-center gap-2">
-            <div class="form-check form-switch mb-0">
-                <input class="form-check-input" type="checkbox" role="switch" id="aiTriageToggle">
-                <label class="form-check-label small" for="aiTriageToggle">Live triage</label>
-            </div>
-            <button type="button" class="btn btn-outline-info btn-sm" id="aiTriageTestModels">
-                <i class="bi bi-plug"></i> Test model stack
-            </button>
-            <span class="badge bg-secondary" id="aiTriageModelStack">—</span>
-            <span class="badge bg-secondary" id="aiTriageRunnerBadge">idle</span>
-        </div>
-    </div>
-
-    <div class="row g-2 mb-3" id="aiTriageKpis">
-        <div class="col-4 col-md-2">
-            <div class="soc-kpi soc-kpi-neutral">
-                <div class="soc-kpi-value" id="aiKpiOpen">0</div>
-                <div class="soc-kpi-label">Open</div>
-            </div>
-        </div>
-        <div class="col-4 col-md-2">
-            <div class="soc-kpi soc-kpi-high">
-                <div class="soc-kpi-value" id="aiKpiTp">0</div>
-                <div class="soc-kpi-label">TP</div>
-            </div>
-        </div>
-        <div class="col-4 col-md-2">
-            <div class="soc-kpi soc-kpi-medium">
-                <div class="soc-kpi-value" id="aiKpiFp">0</div>
-                <div class="soc-kpi-label">FP</div>
-            </div>
-        </div>
-        <div class="col-4 col-md-2">
-            <div class="soc-kpi soc-kpi-neutral">
-                <div class="soc-kpi-value" id="aiKpiTn">0</div>
-                <div class="soc-kpi-label">TN / Benign</div>
-            </div>
-        </div>
-        <div class="col-4 col-md-2">
-            <div class="soc-kpi soc-kpi-critical">
-                <div class="soc-kpi-value" id="aiKpiErrors">0</div>
-                <div class="soc-kpi-label">Errors</div>
-            </div>
-        </div>
-        <div class="col-4 col-md-2">
-            <div class="soc-kpi soc-kpi-neutral">
-                <div class="soc-kpi-value" id="aiKpiLlmRate">—</div>
-                <div class="soc-kpi-label">LLM calls/min</div>
-            </div>
-        </div>
-    </div>
-
-    <div class="card soc-panel mb-3">
-        <div class="card-header py-2 d-flex justify-content-between align-items-center">
-            <span><i class="bi bi-window-sidebar text-info"></i> Live AI Analysis Context</span>
-            <span class="badge bg-secondary" id="aiContextCount">0 events</span>
-        </div>
-        <div class="card-body p-0">
-            <div id="aiLiveContextFeed" class="ai-live-context-feed" style="max-height:220px;overflow-y:auto;">
-                <div class="text-muted small p-3">Enable live triage to stream 3-model packet analysis here.</div>
-            </div>
-        </div>
-    </div>
-
-    <div class="card soc-panel mb-3">
-        <div class="card-body py-2">
-            <div class="row g-2 align-items-end">
-                <div class="col-md-2">
-                    <label class="form-label small mb-0">Source</label>
-                    <select class="form-select form-select-sm" id="aiFilterSource">
-                        <option value="">All</option>
-                        <option value="llm">LLM</option>
-                        <option value="heuristic">Heuristic</option>
-                        <option value="suricata">Suricata</option>
-                        <option value="ml">ML</option>
-                        <option value="correlation">Correlation</option>
-                    </select>
-                </div>
-                <div class="col-md-2">
-                    <label class="form-label small mb-0">Disposition</label>
-                    <select class="form-select form-select-sm" id="aiFilterDisposition">
-                        <option value="">All</option>
-                        <option value="open">Open</option>
-                        <option value="true_positive">True positive</option>
-                        <option value="false_positive">False positive</option>
-                        <option value="true_negative">True negative</option>
-                        <option value="benign">Benign</option>
-                        <option value="error">Error</option>
-                    </select>
-                </div>
-                <div class="col-md-4">
-                    <label class="form-label small mb-0">Search</label>
-                    <input type="search" class="form-control form-control-sm" id="aiFilterSearch" placeholder="IP, attack type, summary…">
-                </div>
-                <div class="col-md-4 text-md-end">
-                    <span class="badge bg-secondary" id="aiTriageRowCount">0 rows</span>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <div class="card soc-panel">
-        <div class="card-body p-0">
-            <div class="capture-live-wrap" style="max-height:520px;">
-                <table class="table table-sm table-hover capture-packet-table mb-0" id="aiTriageTable">
-                    <thead class="sticky-top">
-                        <tr>
-                            <th></th>
-                            <th>Time</th>
-                            <th>Connection</th>
-                            <th>Sources</th>
-                            <th>Attack</th>
-                            <th>Severity</th>
-                            <th>Disposition</th>
-                            <th>Primary LLM</th>
-                            <th>Secondary</th>
-                            <th>3rd model</th>
-                            <th>Summary</th>
-                            <th>Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody id="aiTriageBody">
-                        <tr><td colspan="12" class="empty-state py-4 text-center text-muted">Enable live triage or start capture to populate incidents.</td></tr>
-                    </tbody>
-                </table>
-            </div>
-        </div>
-    </div>
-
-    <div class="offcanvas offcanvas-end text-bg-dark" tabindex="-1" id="aiDeepInspectDrawer" aria-labelledby="aiDeepInspectLabel">
-        <div class="offcanvas-header border-secondary">
-            <h5 class="offcanvas-title" id="aiDeepInspectLabel"><i class="bi bi-search"></i> Deep inspect</h5>
-            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="offcanvas"></button>
-        </div>
-        <div class="offcanvas-body" id="aiDeepInspectBody">
-            <div class="text-muted">Select a row and click Deep inspect.</div>
-        </div>
-    </div>
-</div>
+<div class="ai-triage-dashboard">
+    <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
+        <div>
+            <h5 class="mb-1"><i class="bi bi-robot text-info"></i> AI Packet Triage</h5>
+            <p class="text-muted small mb-0">Batch AI classification — one status per connection. Deep investigate for OSINT + briefing.</p>
+        </div>
+        <div class="d-flex flex-wrap align-items-center gap-2">
+            <div class="form-check form-switch mb-0">
+                <input class="form-check-input" type="checkbox" role="switch" id="aiTriageToggle">
+                <label class="form-check-label small" for="aiTriageToggle">Live triage</label>
+            </div>
+            <button type="button" class="btn btn-outline-info btn-sm" id="aiTriageTestModels">
+                <i class="bi bi-plug"></i> Test model stack
+            </button>
+            <span class="badge bg-secondary" id="aiTriageModelStack">—</span>
+            <span class="badge bg-secondary" id="aiTriageRunnerBadge">idle</span>
+        </div>
+    </div>
+
+    <div class="row g-2 mb-3" id="aiTriageKpis">
+        <div class="col-4 col-md-2">
+            <div class="soc-kpi soc-kpi-neutral">
+                <div class="soc-kpi-value" id="aiKpiOpen">0</div>
+                <div class="soc-kpi-label">Open</div>
+            </div>
+        </div>
+        <div class="col-4 col-md-2">
+            <div class="soc-kpi soc-kpi-high">
+                <div class="soc-kpi-value" id="aiKpiTp">0</div>
+                <div class="soc-kpi-label">TP</div>
+            </div>
+        </div>
+        <div class="col-4 col-md-2">
+            <div class="soc-kpi soc-kpi-medium">
+                <div class="soc-kpi-value" id="aiKpiFp">0</div>
+                <div class="soc-kpi-label">FP</div>
+            </div>
+        </div>
+        <div class="col-4 col-md-2">
+            <div class="soc-kpi soc-kpi-neutral">
+                <div class="soc-kpi-value" id="aiKpiTn">0</div>
+                <div class="soc-kpi-label">TN / Benign</div>
+            </div>
+        </div>
+        <div class="col-4 col-md-2">
+            <div class="soc-kpi soc-kpi-critical">
+                <div class="soc-kpi-value" id="aiKpiErrors">0</div>
+                <div class="soc-kpi-label">Errors</div>
+            </div>
+        </div>
+        <div class="col-4 col-md-2">
+            <div class="soc-kpi soc-kpi-neutral">
+                <div class="soc-kpi-value" id="aiKpiLlmRate">—</div>
+                <div class="soc-kpi-label">LLM calls/min</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card soc-panel mb-3">
+        <div class="card-header py-2 d-flex justify-content-between align-items-center">
+            <span><i class="bi bi-window-sidebar text-info"></i> Live AI Analysis Context</span>
+            <span class="badge bg-secondary" id="aiContextCount">0 events</span>
+        </div>
+        <div class="card-body p-0">
+            <div id="aiLiveContextFeed" class="ai-live-context-feed" style="max-height:220px;overflow-y:auto;">
+                <div class="text-muted small p-3">Enable live triage to stream batch packet classification here.</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card soc-panel mb-3">
+        <div class="card-body py-2">
+            <div class="row g-2 align-items-end">
+                <div class="col-md-2">
+                    <label class="form-label small mb-0">Source</label>
+                    <select class="form-select form-select-sm" id="aiFilterSource">
+                        <option value="">All</option>
+                        <option value="llm">LLM</option>
+                        <option value="heuristic">Heuristic</option>
+                        <option value="suricata">Suricata</option>
+                        <option value="ml">ML</option>
+                        <option value="correlation">Correlation</option>
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label small mb-0">Disposition</label>
+                    <select class="form-select form-select-sm" id="aiFilterDisposition">
+                        <option value="">All</option>
+                        <option value="open">Open</option>
+                        <option value="true_positive">True positive</option>
+                        <option value="false_positive">False positive</option>
+                        <option value="true_negative">True negative</option>
+                        <option value="benign">Benign</option>
+                        <option value="error">Error</option>
+                    </select>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label small mb-0">Search</label>
+                    <input type="search" class="form-control form-control-sm" id="aiFilterSearch" placeholder="IP, attack type, summary…">
+                </div>
+                <div class="col-md-4 text-md-end">
+                    <span class="badge bg-secondary" id="aiTriageRowCount">0 rows</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card soc-panel">
+        <div class="card-body p-0">
+            <div class="capture-live-wrap" style="max-height:520px;">
+                <table class="table table-sm table-hover capture-packet-table mb-0" id="aiTriageTable">
+                    <thead class="sticky-top">
+                        <tr>
+                            <th></th>
+                            <th>Time</th>
+                            <th>Connection</th>
+                            <th>Sources</th>
+                            <th>AI status</th>
+                            <th>Severity</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="aiTriageBody">
+                        <tr><td colspan="7" class="empty-state py-4 text-center text-muted">Enable live triage or start capture to populate incidents.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <div class="offcanvas offcanvas-end text-bg-dark" tabindex="-1" id="aiDeepInspectDrawer" aria-labelledby="aiDeepInspectLabel">
+        <div class="offcanvas-header border-secondary">
+            <h5 class="offcanvas-title" id="aiDeepInspectLabel"><i class="bi bi-search"></i> Deep investigate</h5>
+            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="offcanvas"></button>
+        </div>
+        <div class="offcanvas-body" id="aiDeepInspectBody">
+            <div class="text-muted">Select a row and click Deep Investigate.</div>
+        </div>
+    </div>
+</div>

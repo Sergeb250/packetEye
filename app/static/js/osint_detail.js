@@ -198,22 +198,24 @@
         if (options.onLoading && options.inspectorEl) {
             options.onLoading(options.inspectorEl, target);
         }
+        const useLive = options.live || Boolean(window.livePage && analysisId);
+        const url = useLive
+            ? `/api/live/osint/${encodeURIComponent(analysisId)}/${encodeURIComponent(target)}`
+            : `/api/investigate/target/${encodeURIComponent(analysisId)}/${encodeURIComponent(target)}`;
         try {
             const summarize = options.summarize !== false;
             const detailLevel = options.detailLevel || 'medium';
-            const res = await fetch(
-                `/api/investigate/target/${analysisId}/${encodeURIComponent(target)}`,
-                {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        summarize,
-                        detail_level: detailLevel,
-                        alert_context: options.alertContext || null,
-                    }),
-                },
-            );
-            const data = await res.json();
+            const res = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    summarize,
+                    detail_level: detailLevel,
+                    alert_context: options.alertContext || null,
+                }),
+            });
+            const parse = window.fetchJsonOrThrow || ((r) => r.json());
+            const data = await parse(res);
             if (!res.ok) throw new Error(data.error || 'lookup failed');
 
             const aiSummary = data.ai_summary?.ok ? data.ai_summary : (data.ai_summary?.error ? null : data.ai_summary);

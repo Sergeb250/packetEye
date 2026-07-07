@@ -64,6 +64,81 @@ class FlowState:
     application_layer: str | None = None
     tcp_seen_syn: bool = False
     tcp_closed: bool = False
+    # Incremental per-direction stats for the full (schema v4) feature set.
+    # Kept as scalars (count/sum/sumsq/min/max) so large PCAPs stay O(1)
+    # memory per flow.
+    fwd_len_min: float | None = None
+    fwd_len_max: float = 0.0
+    fwd_len_sumsq: float = 0.0
+    bwd_len_min: float | None = None
+    bwd_len_max: float = 0.0
+    bwd_len_sumsq: float = 0.0
+    pkt_len_min: float | None = None
+    pkt_len_max: float = 0.0
+    pkt_len_sumsq: float = 0.0
+    fin_count: int = 0
+    syn_count: int = 0
+    rst_count: int = 0
+    psh_count: int = 0
+    ack_count: int = 0
+    urg_count: int = 0
+    fwd_psh_count: int = 0
+    bwd_psh_count: int = 0
+    fwd_urg_count: int = 0
+    bwd_urg_count: int = 0
+    fwd_header_len: int = 0
+    bwd_header_len: int = 0
+    init_win_fwd: int | None = None
+    init_win_bwd: int | None = None
+    act_data_pkt_fwd: int = 0
+    min_seg_size_fwd: int | None = None
+    last_fwd_ts: float | None = None
+    last_bwd_ts: float | None = None
+    fwd_iat_count: int = 0
+    fwd_iat_sum: float = 0.0
+    fwd_iat_sumsq: float = 0.0
+    fwd_iat_min: float | None = None
+    fwd_iat_max: float = 0.0
+    bwd_iat_count: int = 0
+    bwd_iat_sum: float = 0.0
+    bwd_iat_sumsq: float = 0.0
+    bwd_iat_min: float | None = None
+    bwd_iat_max: float = 0.0
+
+    def record_direction(self, payload_len: int, is_fwd: bool, ts: float) -> None:
+        length = float(payload_len)
+        if self.pkt_len_min is None or length < self.pkt_len_min:
+            self.pkt_len_min = length
+        self.pkt_len_max = max(self.pkt_len_max, length)
+        self.pkt_len_sumsq += length * length
+        if is_fwd:
+            if self.fwd_len_min is None or length < self.fwd_len_min:
+                self.fwd_len_min = length
+            self.fwd_len_max = max(self.fwd_len_max, length)
+            self.fwd_len_sumsq += length * length
+            if self.last_fwd_ts is not None and ts >= self.last_fwd_ts:
+                iat = ts - self.last_fwd_ts
+                self.fwd_iat_count += 1
+                self.fwd_iat_sum += iat
+                self.fwd_iat_sumsq += iat * iat
+                self.fwd_iat_max = max(self.fwd_iat_max, iat)
+                if self.fwd_iat_min is None or iat < self.fwd_iat_min:
+                    self.fwd_iat_min = iat
+            self.last_fwd_ts = ts
+        else:
+            if self.bwd_len_min is None or length < self.bwd_len_min:
+                self.bwd_len_min = length
+            self.bwd_len_max = max(self.bwd_len_max, length)
+            self.bwd_len_sumsq += length * length
+            if self.last_bwd_ts is not None and ts >= self.last_bwd_ts:
+                iat = ts - self.last_bwd_ts
+                self.bwd_iat_count += 1
+                self.bwd_iat_sum += iat
+                self.bwd_iat_sumsq += iat * iat
+                self.bwd_iat_max = max(self.bwd_iat_max, iat)
+                if self.bwd_iat_min is None or iat < self.bwd_iat_min:
+                    self.bwd_iat_min = iat
+            self.last_bwd_ts = ts
 
     def flow_key(self):
         return (self.src_ip, self.dst_ip, self.src_port, self.dst_port, self.protocol)
@@ -255,17 +330,52 @@ class PCAPParser:
                 src_ip, dst_ip, tcp.sport, tcp.dport, "TCP", ts
             )
             payload_len = len(tcp.data)
-            if flow.src_ip == src_ip:
+            is_fwd = flow.src_ip == src_ip
+            if is_fwd:
                 flow.bytes_sent += payload_len
                 flow.packets_sent += 1
             else:
                 flow.bytes_recv += payload_len
                 flow.packets_recv += 1
+            flow.record_direction(payload_len, is_fwd, ts)
+
+            header_len = tcp.off * 4
+            if is_fwd:
+                flow.fwd_header_len += header_len
+                if flow.min_seg_size_fwd is None or header_len < flow.min_seg_size_fwd:
+                    flow.min_seg_size_fwd = header_len
+                if payload_len >= 1:
+                    flow.act_data_pkt_fwd += 1
+                if flow.init_win_fwd is None:
+                    flow.init_win_fwd = tcp.win
+            else:
+                flow.bwd_header_len += header_len
+                if flow.init_win_bwd is None:
+                    flow.init_win_bwd = tcp.win
 
             if tcp.flags & dpkt.tcp.TH_SYN:
                 flow.tcp_seen_syn = True
+                flow.syn_count += 1
+            if tcp.flags & dpkt.tcp.TH_FIN:
+                flow.fin_count += 1
+            if tcp.flags & dpkt.tcp.TH_RST:
+                flow.rst_count += 1
             if tcp.flags & (dpkt.tcp.TH_FIN | dpkt.tcp.TH_RST):
                 flow.tcp_closed = True
+            if tcp.flags & dpkt.tcp.TH_PUSH:
+                flow.psh_count += 1
+                if is_fwd:
+                    flow.fwd_psh_count += 1
+                else:
+                    flow.bwd_psh_count += 1
+            if tcp.flags & dpkt.tcp.TH_ACK:
+                flow.ack_count += 1
+            if tcp.flags & dpkt.tcp.TH_URG:
+                flow.urg_count += 1
+                if is_fwd:
+                    flow.fwd_urg_count += 1
+                else:
+                    flow.bwd_urg_count += 1
 
             self._inspect_tcp_payload(flow, tcp, src_ip, dst_ip, ts)
 
@@ -275,20 +385,24 @@ class PCAPParser:
                 src_ip, dst_ip, udp.sport, udp.dport, "UDP", ts
             )
             payload_len = len(udp.data)
-            if flow.src_ip == src_ip:
+            is_fwd = flow.src_ip == src_ip
+            if is_fwd:
                 flow.bytes_sent += payload_len
                 flow.packets_sent += 1
             else:
                 flow.bytes_recv += payload_len
                 flow.packets_recv += 1
+            flow.record_direction(payload_len, is_fwd, ts)
             self._inspect_udp_payload(flow, udp, src_ip, dst_ip)
 
         elif kind == "icmp":
             icmp = payload
             flow = self._get_or_create_flow(src_ip, dst_ip, 0, 0, "ICMP", ts)
             flow.application_layer = "ICMP"
-            flow.bytes_sent += len(icmp.data) if icmp.data else 0
+            icmp_len = len(icmp.data) if icmp.data else 0
+            flow.bytes_sent += icmp_len
             flow.packets_sent += 1
+            flow.record_direction(icmp_len, True, ts)
 
     def _inspect_tcp_payload(self, flow, tcp, src_ip, dst_ip, ts):
         data = tcp.data
@@ -374,6 +488,14 @@ class PCAPParser:
     def _finalize_udp_flows(self):
         pass
 
+    @staticmethod
+    def _stats_std(count: float, total: float, sumsq: float) -> float:
+        """Population std-dev from incremental count/sum/sum-of-squares."""
+        if count <= 0:
+            return 0.0
+        mean = total / count
+        return math.sqrt(max(0.0, sumsq / count - mean * mean))
+
     def _build_output(self) -> dict[str, Any]:
         flow_list = []
         for key, flow in self.flows.items():
@@ -381,7 +503,7 @@ class PCAPParser:
             if flow.start_time and flow.end_time:
                 duration_ms = int((flow.end_time - flow.start_time).total_seconds() * 1000)
 
-            iat_mean, iat_std, iat_max, fwd_iat_mean = 0.0, 0.0, 0.0, 0.0
+            iat_mean, iat_std, iat_max, iat_min = 0.0, 0.0, 0.0, 0.0
             if len(flow.packet_times) > 1:
                 iats = [
                     flow.packet_times[i + 1] - flow.packet_times[i]
@@ -389,11 +511,13 @@ class PCAPParser:
                 ]
                 iat_mean = sum(iats) / len(iats)
                 iat_max = max(iats)
+                iat_min = min(iats)
                 if len(iats) > 1:
                     iat_std = math.sqrt(sum((x - iat_mean) ** 2 for x in iats) / len(iats))
-                half = max(1, len(iats) // 2)
-                fwd_iats = iats[:half]
-                fwd_iat_mean = sum(fwd_iats) / len(fwd_iats)
+
+            # Real per-direction IATs (replaces the old first-half heuristic).
+            fwd_iat_mean = flow.fwd_iat_sum / flow.fwd_iat_count if flow.fwd_iat_count else 0.0
+            bwd_iat_mean = flow.bwd_iat_sum / flow.bwd_iat_count if flow.bwd_iat_count else 0.0
 
             flow_list.append(
                 {
@@ -422,8 +546,49 @@ class PCAPParser:
                     "iat_mean": iat_mean,
                     "iat_std": iat_std,
                     "iat_max": iat_max,
+                    "iat_min": iat_min,
                     "fwd_iat_mean": fwd_iat_mean,
                     "is_external_dst": is_external_ip(flow.dst_ip),
+                    # Extended stats consumed by the full (schema v4) feature
+                    # builder; None means "not measured" → training-median fill.
+                    "fwd_iat_std": self._stats_std(flow.fwd_iat_count, flow.fwd_iat_sum, flow.fwd_iat_sumsq),
+                    "fwd_iat_max": flow.fwd_iat_max,
+                    "fwd_iat_min": flow.fwd_iat_min if flow.fwd_iat_min is not None else 0.0,
+                    "fwd_iat_total": flow.fwd_iat_sum,
+                    "bwd_iat_mean": bwd_iat_mean,
+                    "bwd_iat_std": self._stats_std(flow.bwd_iat_count, flow.bwd_iat_sum, flow.bwd_iat_sumsq),
+                    "bwd_iat_max": flow.bwd_iat_max,
+                    "bwd_iat_min": flow.bwd_iat_min if flow.bwd_iat_min is not None else 0.0,
+                    "bwd_iat_total": flow.bwd_iat_sum,
+                    "fwd_pkt_len_max": flow.fwd_len_max,
+                    "fwd_pkt_len_min": flow.fwd_len_min if flow.fwd_len_min is not None else 0.0,
+                    "fwd_pkt_len_std": self._stats_std(flow.packets_sent, flow.bytes_sent, flow.fwd_len_sumsq),
+                    "bwd_pkt_len_max": flow.bwd_len_max,
+                    "bwd_pkt_len_min": flow.bwd_len_min if flow.bwd_len_min is not None else 0.0,
+                    "bwd_pkt_len_std": self._stats_std(flow.packets_recv, flow.bytes_recv, flow.bwd_len_sumsq),
+                    "pkt_len_min": flow.pkt_len_min if flow.pkt_len_min is not None else 0.0,
+                    "pkt_len_max": flow.pkt_len_max,
+                    "pkt_len_std": self._stats_std(
+                        flow.packets_sent + flow.packets_recv,
+                        flow.bytes_sent + flow.bytes_recv,
+                        flow.pkt_len_sumsq,
+                    ),
+                    "fin_count": flow.fin_count,
+                    "syn_count": flow.syn_count,
+                    "rst_count": flow.rst_count,
+                    "psh_count": flow.psh_count,
+                    "ack_count": flow.ack_count,
+                    "urg_count": flow.urg_count,
+                    "fwd_psh_count": flow.fwd_psh_count,
+                    "bwd_psh_count": flow.bwd_psh_count,
+                    "fwd_urg_count": flow.fwd_urg_count,
+                    "bwd_urg_count": flow.bwd_urg_count,
+                    "fwd_header_len": flow.fwd_header_len,
+                    "bwd_header_len": flow.bwd_header_len,
+                    "init_win_fwd": flow.init_win_fwd,
+                    "init_win_bwd": flow.init_win_bwd,
+                    "act_data_pkt_fwd": flow.act_data_pkt_fwd,
+                    "min_seg_size_fwd": flow.min_seg_size_fwd,
                 }
             )
 

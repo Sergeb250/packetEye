@@ -46,6 +46,11 @@ def create_app(config_name=None):
     _ensure_dir(flask_app.config.get("CAPTURE_STATE_DIR"))
     _ensure_dir(flask_app.config.get("TCPDUMP_CHUNK_DIR"))
     _ensure_dir(flask_app.config.get("SURICATA_LOG_DIR"))
+    _ensure_dir(flask_app.config.get("STREAM_DATA_DIR"))
+
+    from app.services.streams import init_streams
+
+    init_streams(dict(flask_app.config))
     # EVE log: Suricata writes it, packetEye only reads it — creating its
     # parent is a convenience for the in-project default, never a requirement.
     eve = flask_app.config.get("SURICATA_EVE_PATH", "")
@@ -53,6 +58,15 @@ def create_app(config_name=None):
         _ensure_dir(Path(eve).parent)
 
     db.init_app(flask_app)
+
+    @flask_app.teardown_appcontext
+    def _release_db_session(exception=None):
+        # Flask-SQLAlchemy registers its own teardown, but background threads
+        # (live monitor, LLM triage, enrichers) push many short app contexts;
+        # an explicit remove() guarantees pooled connections go back even if
+        # the extension's behavior changes across versions.
+        db.session.remove()
+
     cache.init_app(flask_app)
     login_manager.init_app(flask_app)
     login_manager.login_view = "auth.login"

@@ -21,4 +21,7 @@ def test_router_parallel_triage(mock_stack):
 
     router = ModelRouter({"ZAI_API_KEY": "z", "NVIDIA_API_KEY": "n"})
     outputs, errors = router.parallel_triage("sys", "user")
-    assert "zai" in outputs or "nvidia" in outputs
+    assert "zai" in outputs
+    assert "nvidia" in outputs
+    zai._complete_inner.assert_called_once()
+    nvidia._complete_inner.assert_called_once()

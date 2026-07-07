@@ -2,16 +2,10 @@
 
 from __future__ import annotations
 
-import json
 import time
 import uuid
-from typing import Any
 
-from app.extensions import cache, db
-from app.models.analysis import Finding
-
-MAX_INCIDENTS = 500
-CACHE_PREFIX = "live:triage:incidents:"
+from app.services.streams import get_incident_tracker
 
 DISPOSITIONS = frozenset({
     "open", "true_positive", "false_positive", "true_negative", "benign", "error",
@@ -27,25 +21,21 @@ SOURCE_MAP = {
 }
 
 
-def _cache_key(session_id: str) -> str:
-    return f"{CACHE_PREFIX}{session_id}"
+def _tracker():
+    return get_incident_tracker()
 
 
 def _load(session_id: str) -> list[dict]:
-    try:
-        rows = cache.get(_cache_key(session_id)) or []
-        if isinstance(rows, str):
-            rows = json.loads(rows)
-        return list(rows) if isinstance(rows, list) else []
-    except Exception:
+    tracker = _tracker()
+    if not tracker:
         return []
+    return tracker.load(session_id)
 
 
 def _save(session_id: str, rows: list[dict]) -> None:
-    try:
-        cache.set(_cache_key(session_id), rows[-MAX_INCIDENTS:], timeout=86400)
-    except Exception:
-        pass
+    tracker = _tracker()
+    if tracker:
+        tracker.save(session_id, rows)
 
 
 def _connection_key(row: dict) -> str:
@@ -81,10 +71,12 @@ def build_incident_row(
     severity: str = "info",
     confidence: float = 0.0,
     disposition: str = "open",
+    ai_status: str = "",
     llm_primary: dict | None = None,
     llm_secondary: dict | None = None,
     llm_tertiary: dict | None = None,
     llm_merged_summary: str = "",
+    verdict_line: str = "",
     errors: list[str] | None = None,
     alert_id: str | None = None,
     finding_id: str | None = None,
@@ -94,6 +86,9 @@ def build_incident_row(
     timestamp: float | None = None,
 ) -> dict:
     disp = disposition if disposition in DISPOSITIONS else "open"
+    status = (ai_status or disp).lower()
+    if status not in DISPOSITIONS:
+        status = disp
     return {
         "id": str(uuid.uuid4()),
         "timestamp": timestamp or time.time(),
@@ -108,10 +103,12 @@ def build_incident_row(
         "severity": severity,
         "confidence": round(float(confidence or 0), 3),
         "disposition": disp,
+        "ai_status": status,
         "llm_primary": llm_primary or {},
         "llm_secondary": llm_secondary or {},
         "llm_tertiary": llm_tertiary or {},
         "llm_merged_summary": llm_merged_summary or "",
+        "verdict_line": verdict_line or "",
         "errors": list(errors or []),
         "alert_ids": [alert_id] if alert_id else [],
         "finding_id": finding_id,
@@ -277,22 +274,11 @@ def set_verdict(
 ) -> dict | None:
     if disposition not in DISPOSITIONS:
         disposition = "open"
-    row = update_incident(
+    return update_incident(
         session_id,
         incident_id,
         {"disposition": disposition, "analyst_note": analyst_note},
     )
-    if not row:
-        return None
-    finding_id = row.get("finding_id")
-    if finding_id:
-        finding = Finding.query.get(finding_id)
-        if finding:
-            finding.is_false_positive = disposition in ("false_positive", "true_negative", "benign")
-            if analyst_note:
-                finding.description = (finding.description or "") + f"\n\nAnalyst: {analyst_note}"
-            db.session.commit()
-    return row
 
 
 def summary_stats(session_id: str) -> dict:

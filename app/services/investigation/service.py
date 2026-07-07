@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 
 from app.extensions import db
 from app.models.analysis import Finding
+from app.services.db_utils import release_db_session, reset_db_session
 from app.services.enrichment.async_runner import run_async
 from app.services.enrichment.orchestrator import EnrichmentOrchestrator
 from app.services.enrichment.osint_summary import summarize_osint
@@ -176,12 +177,17 @@ def investigate_finding_sync(config: dict, finding_id: str) -> dict:
         results = service.run(targets)
     except Exception as exc:
         logger.exception("Investigation failed for finding %s", finding_id)
+        # The failure may have poisoned the session — reset before the
+        # status write below, or it fails with PendingRollbackError too.
+        reset_db_session()
         result = {
             "status": "failed",
             "at": datetime.now(timezone.utc).isoformat(),
             "error": str(exc),
         }
-        _set_investigation(Finding.query.get(finding_id), result)
+        failed_finding = Finding.query.get(finding_id)
+        if failed_finding:
+            _set_investigation(failed_finding, result)
         return {"ok": False, "error": str(exc)}
 
     malicious = [v for v in results.values() if v.get("is_malicious")]
@@ -198,6 +204,10 @@ def investigate_finding_sync(config: dict, finding_id: str) -> dict:
         _sync_observables(finding, results)
     except Exception:
         logger.exception("Observable sync failed for finding %s", finding_id)
+        reset_db_session()
+        finding = Finding.query.get(finding_id)
+        if not finding:
+            return {"ok": True, "investigation": result}
 
     # Malicious OSINT verdict on an already-flagged finding is high-signal.
     if malicious and finding.severity in ("low", "medium"):
@@ -217,6 +227,9 @@ def kickoff_investigation(app, finding_id: str) -> bool:
                 investigate_finding_sync(dict(app.config), finding_id)
             except Exception:
                 logger.exception("Background investigation failed for %s", finding_id)
+                reset_db_session()
+            else:
+                release_db_session()
 
     thread = threading.Thread(target=_run, name=f"investigate-{finding_id[:8]}", daemon=True)
     thread.start()
@@ -357,10 +370,13 @@ def investigate_flow_sync(config: dict, flow_id: str) -> dict:
         service = InvestigationService(config)
         results = service.run(targets)
     except Exception as exc:
-        meta = dict(flow.enrichment_json or {})
-        meta[inv_key] = {"status": "failed", "at": datetime.now(timezone.utc).isoformat(), "error": str(exc)}
-        flow.enrichment_json = meta
-        db.session.commit()
+        reset_db_session()
+        flow = Flow.query.get(flow_id)  # re-fetch: reset detached the old instance
+        if flow:
+            meta = dict(flow.enrichment_json or {})
+            meta[inv_key] = {"status": "failed", "at": datetime.now(timezone.utc).isoformat(), "error": str(exc)}
+            flow.enrichment_json = meta
+            db.session.commit()
         return {"ok": False, "error": str(exc)}
 
     malicious = [v for v in results.values() if v.get("is_malicious")]

@@ -404,11 +404,13 @@ See [docs/SURICATA_SETUP.md](docs/SURICATA_SETUP.md).
 
 ### 4.12 Alert Webhooks
 
-**Config:** `ALERT_WEBHOOK_URL` (Discord-compatible), `ALERT_WEBHOOK_MIN_SEVERITY`, `ALERT_WEBHOOK_RATE_LIMIT`.
+**UI:** Configure Discord webhooks and alert filters at **Integrations** (`/integrations`) — severity, source (ML/Suricata/Correlation/LLM), and AI status.
 
-**Logic:** On live alert emit, if severity ≥ minimum and rate limit allows → POST embed JSON to webhook.
+**Storage:** `data/integrations.json` (path: `INTEGRATIONS_CONFIG_PATH`). Optional bootstrap from `ALERT_WEBHOOK_URL` in `.env` on first run.
 
-**Test:** `POST /api/webhook/test`
+**Logic:** On every live alert emit (including LLM triage), matching alerts POST a Discord embed when enabled and within rate limit.
+
+**Test:** `POST /api/integrations/discord/test` or `POST /api/webhook/test`
 
 ---
 

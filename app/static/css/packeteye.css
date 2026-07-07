@@ -733,6 +733,22 @@ code { color: #b4306a; }
     box-shadow: 0 4px 12px rgba(16, 24, 40, 0.18);
 }
 
+.chat-model-select {
+    font-size: 0.78rem;
+    max-width: 100%;
+}
+
+.escalation-compose .escalation-body {
+    min-height: 220px;
+    resize: vertical;
+    font-size: 0.9rem;
+    line-height: 1.5;
+}
+
+.escalation-compose-toolbar {
+    background: #f8f9fa !important;
+}
+
 .chat-markdown {
     font-size: 0.88rem;
     line-height: 1.55;

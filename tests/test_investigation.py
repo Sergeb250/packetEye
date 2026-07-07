@@ -4,6 +4,7 @@ import time
 from types import SimpleNamespace
 
 from app.services.investigation.service import extract_targets
+from app.services.integrations.store import save_discord_config
 from app.services.live.correlation import LiveCorrelator
 from app.services.live.webhook_notifier import WebhookNotifier
 
@@ -72,21 +73,41 @@ def test_correlator_ignores_unflagged_ml():
 # --- webhook ---------------------------------------------------------------
 
 def test_webhook_disabled_without_url():
-    wh = WebhookNotifier({"ALERT_WEBHOOK_URL": ""})
+    wh = WebhookNotifier({"INTEGRATIONS_CONFIG_PATH": "/nonexistent/integrations.json"})
     assert wh.enabled is False
-    assert wh.notify({"severity": "critical"}) is False
+    assert wh.notify({"severity": "critical", "type": "ml"}) is False
 
 
-def test_webhook_severity_gate():
-    wh = WebhookNotifier({"ALERT_WEBHOOK_URL": "https://example.test/hook", "ALERT_WEBHOOK_MIN_SEVERITY": "high"})
-    assert wh._passes_severity("critical") is True
-    assert wh._passes_severity("high") is True
-    assert wh._passes_severity("medium") is False
-    assert wh._passes_severity("low") is False
+def test_webhook_severity_gate(tmp_path):
+    path = tmp_path / "integrations.json"
+    config = {"INTEGRATIONS_CONFIG_PATH": str(path)}
+    save_discord_config({
+        "enabled": True,
+        "url": "https://example.test/hook",
+        "severities": ["high", "critical"],
+        "sources": ["all"],
+        "ai_statuses": ["all"],
+    }, config)
+    wh = WebhookNotifier(config)
+    dc = wh._reload()
+    assert wh._passes_filters({"severity": "critical", "type": "ml"}, dc) is True
+    assert wh._passes_filters({"severity": "high", "type": "ml"}, dc) is True
+    assert wh._passes_filters({"severity": "medium", "type": "ml"}, dc) is False
+    assert wh._passes_filters({"severity": "low", "type": "suricata"}, dc) is False
 
 
-def test_webhook_rate_limit():
-    wh = WebhookNotifier({"ALERT_WEBHOOK_URL": "https://example.test/hook", "ALERT_WEBHOOK_RATE_LIMIT": 2})
+def test_webhook_rate_limit(tmp_path):
+    path = tmp_path / "integrations.json"
+    config = {"INTEGRATIONS_CONFIG_PATH": str(path)}
+    save_discord_config({
+        "enabled": True,
+        "url": "https://example.test/hook",
+        "severities": ["all"],
+        "sources": ["all"],
+        "ai_statuses": ["all"],
+        "rate_limit_per_minute": 2,
+    }, config)
+    wh = WebhookNotifier(config)
     assert wh._allowed() is True
     assert wh._allowed() is True
     assert wh._allowed() is False

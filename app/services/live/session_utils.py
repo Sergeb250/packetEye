@@ -4,7 +4,7 @@ from __future__ import annotations
 
 
 def resolve_live_session_id(config: dict, session_id: str | None = None) -> str | None:
-    """Best-effort session id: explicit arg → LLM triage → capture → latest live analysis."""
+    """Best-effort session id: explicit arg → LLM triage → capture → latest live session."""
     if session_id:
         return str(session_id).strip() or None
 
@@ -28,13 +28,16 @@ def resolve_live_session_id(config: dict, session_id: str | None = None) -> str 
 
     try:
         from app.services.live.monitor import monitor_status
-        from app.models.analysis import Analysis
+        from app.services.streams import get_session_store
 
-        latest = Analysis.query.filter_by(source="live").order_by(Analysis.created_at.desc()).first()
-        if latest and monitor_status(latest.id).get("running"):
-            return latest.id
-        if latest and latest.status == "running":
-            return latest.id
+        store = get_session_store()
+        if store:
+            running = store.find_running()
+            if running and monitor_status(running["id"]).get("running"):
+                return running["id"]
+            recent = store.list_recent(limit=1)
+            if recent and recent[0].get("status") == "running":
+                return recent[0]["id"]
     except Exception:
         pass
 

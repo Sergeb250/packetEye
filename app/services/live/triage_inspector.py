@@ -5,27 +5,11 @@ from __future__ import annotations
 import json
 import logging
 
+from app.services.llm.prompts import DEEP_INSPECT_SYSTEM, DEEP_INSPECT_USER
 from app.services.llm.router import get_model_router
 from app.services.llm.tokens import with_tier
 
 logger = logging.getLogger(__name__)
-
-DEEP_SYSTEM = """You are packetEye's senior SOC analyst. Provide a detailed briefing.
-Respond ONLY with JSON: {"analysis": "Markdown briefing with Verdict, Evidence, Attack classification, FP risk, Actions"}"""
-
-DEEP_USER = """Incident row:
-{incident}
-
-Related packet/flow:
-{packet}
-
-Primary model triage:
-{primary}
-
-Secondary model triage:
-{secondary}
-
-Provide a thorough analyst briefing."""
 
 
 def deep_inspect_incident(config: dict, incident: dict) -> dict:
@@ -41,7 +25,7 @@ def deep_inspect_incident(config: dict, incident: dict) -> dict:
         },
         "detailed",
     )
-    user = DEEP_USER.format(
+    user = DEEP_INSPECT_USER.format(
         incident=json.dumps(incident, default=str)[:6000],
         packet=json.dumps(incident.get("packet") or {}, default=str)[:3000],
         primary=json.dumps(incident.get("llm_primary") or {}, default=str)[:2000],
@@ -51,7 +35,7 @@ def deep_inspect_incident(config: dict, incident: dict) -> dict:
         router = get_model_router(fast_cfg)
         best, outputs, errors = router.complete_json(
             "deep_inspect",
-            DEEP_SYSTEM,
+            DEEP_INSPECT_SYSTEM,
             user,
             temperature=0.2,
             parallel=False,

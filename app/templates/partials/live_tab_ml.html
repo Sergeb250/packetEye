@@ -10,9 +10,9 @@
         <div class="card h-100">
             <div class="card-header d-flex justify-content-between align-items-center">
                 <span>ML controls</span>
-                {% if live.webhook_enabled %}
-                <button id="btnWebhookTest" class="btn btn-outline-info btn-sm" type="button"><i class="bi bi-discord"></i> Test</button>
-                {% endif %}
+                <a href="{{ url_for('main.integrations') }}" class="btn btn-outline-info btn-sm" title="Configure Discord alert webhooks">
+                    <i class="bi bi-discord"></i> Integrations
+                </a>
             </div>
             <div class="card-body">
                 <div class="mb-3">

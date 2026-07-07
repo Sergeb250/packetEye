@@ -10,6 +10,7 @@
     const form = document.getElementById('chatForm');
     const input = document.getElementById('chatInput');
     const sendBtn = document.getElementById('chatSend');
+    const modelSelect = document.getElementById('chatModel');
     const history = [];
     let focusFindingId = null;
     let focusFlowId = null;
@@ -17,6 +18,8 @@
     const pageAnalysisId = panelEl.dataset.analysisId
         || (typeof analysisId !== 'undefined' ? analysisId : null)
         || null;
+    const isReportPage = panelEl.dataset.reportPage === 'true';
+    const MODEL_STORAGE_KEY = 'packeteye.chatModel';
 
     fab.addEventListener('click', () => panel.show());
 
@@ -24,6 +27,45 @@
         const div = document.createElement('div');
         div.textContent = value == null ? '' : String(value);
         return div.innerHTML;
+    }
+
+    function shortModelLabel(id) {
+        const parts = String(id || '').split('/');
+        return parts.length > 1 ? parts[parts.length - 1] : id;
+    }
+
+    async function loadModels() {
+        if (!modelSelect) return;
+        try {
+            const res = await fetch('/api/llm/models');
+            const data = await res.json();
+            const models = data.models || [];
+            const saved = localStorage.getItem(MODEL_STORAGE_KEY);
+            modelSelect.innerHTML = '';
+            models.forEach((id) => {
+                const opt = document.createElement('option');
+                opt.value = id;
+                opt.textContent = shortModelLabel(id);
+                if (id === data.default) opt.dataset.default = '1';
+                modelSelect.appendChild(opt);
+            });
+            if (saved && models.includes(saved)) {
+                modelSelect.value = saved;
+            } else if (data.default) {
+                modelSelect.value = data.default;
+            }
+        } catch {
+            modelSelect.innerHTML = '<option value="">Default model</option>';
+        }
+    }
+
+    if (modelSelect) {
+        loadModels();
+        modelSelect.addEventListener('change', () => {
+            if (modelSelect.value) {
+                localStorage.setItem(MODEL_STORAGE_KEY, modelSelect.value);
+            }
+        });
     }
 
     function renderMarkdown(text) {
@@ -99,7 +141,12 @@
             finding_id: focusFindingId,
             flow_id: focusFlowId,
             context_payload: focusContextPayload,
+            detail_tier: 'auto',
+            report_page: isReportPage,
         };
+        if (modelSelect && modelSelect.value) {
+            body.model = modelSelect.value;
+        }
 
         try {
             const res = await fetch('/api/chat', {
@@ -153,7 +200,7 @@
                 focusContextPayload = null;
             }
             panel.show();
-            send(`Analyze this finding with full context. Use markdown tables and a mermaid diagram if helpful: "${btn.dataset.findingTitle || 'selected finding'}"`);
+            send(`Quick take on this finding: "${btn.dataset.findingTitle || 'selected finding'}"`);
         });
     });
 

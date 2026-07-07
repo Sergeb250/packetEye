@@ -34,6 +34,9 @@
                 <a class="app-sidebar-link {% if request.endpoint in live_endpoints %}active{% endif %}" href="{{ url_for('main.live_overview') }}">
                     <i class="bi bi-broadcast"></i><span>Live Monitor</span>
                 </a>
+                <a class="app-sidebar-link {% if request.endpoint == 'main.integrations' %}active{% endif %}" href="{{ url_for('main.integrations') }}">
+                    <i class="bi bi-plug"></i><span>Integrations</span>
+                </a>
             </nav>
             <div class="app-sidebar-footer small text-muted">
                 <i class="bi bi-shield-check text-primary"></i> NIDS · ML · Suricata

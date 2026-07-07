@@ -19,10 +19,12 @@ def test_connectivity_requires_api_key(app):
 @patch("app.services.llm.connectivity.build_live_stack")
 def test_connectivity_stack_ok(mock_stack, app):
     zai = MagicMock()
-    zai.complete.return_value = '{"status":"ok"}'
+    zai.label = "zai"
+    zai._complete_inner.return_value = '{"status":"ok"}'
     zai.model = "glm-4-flash"
     nvidia = MagicMock()
-    nvidia.complete.return_value = '{"status":"ok"}'
+    nvidia.label = "nvidia"
+    nvidia._complete_inner.return_value = '{"status":"ok"}'
     nvidia.model = "deepseek-ai/deepseek-v4-pro"
     mock_stack.return_value = [("zai", zai), ("nvidia", nvidia)]
 
@@ -33,5 +35,8 @@ def test_connectivity_stack_ok(mock_stack, app):
         result = probe_llm_connectivity(dict(app.config))
 
     assert result["ok"] is True
+    assert result["sequential"] is True
     assert result["results"]["zai"]["ok"] is True
     assert result["results"]["nvidia"]["ok"] is True
+    zai._complete_inner.assert_called_once()
+    nvidia._complete_inner.assert_called_once()

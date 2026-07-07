@@ -223,7 +223,7 @@ def poll_monitor_events(config: dict, since_id: int = 0) -> list[dict]:
 
     with open(eve_path, encoding="utf-8", errors="replace") as f:
         f.seek(offset)
-        for _ in range(300):
+        for _ in range(80):
             line = f.readline()
             if not line:
                 break

@@ -62,6 +62,9 @@ class ScapyFlowMonitor:
                 "packets_sent": 0,
                 "packets_recv": 0,
                 "iat_samples": [],
+                "len_min": None,
+                "len_max": 0,
+                "len_sumsq": 0.0,
                 "last_ts": ts,
                 "is_external_dst": is_external_ip(dst_ip),
             }
@@ -74,6 +77,10 @@ class ScapyFlowMonitor:
         flow["packets_sent"] += 1
         flow["bytes_recv"] = flow["bytes_sent"]
         flow["packets_recv"] = flow["packets_sent"]
+        if flow["len_min"] is None or length < flow["len_min"]:
+            flow["len_min"] = length
+        flow["len_max"] = max(flow["len_max"], length)
+        flow["len_sumsq"] += float(length) * length
 
     def _flush_idle(self, now: float) -> list[dict]:
         ready = []
@@ -87,6 +94,8 @@ class ScapyFlowMonitor:
         return ready
 
     def _to_flow_dict(self, flow: dict) -> dict:
+        import math
+
         iats = flow.get("iat_samples") or []
         start = flow.get("start_time")
         end = flow.get("end_time")
@@ -94,6 +103,13 @@ class ScapyFlowMonitor:
         if start and end:
             duration_ms = max(0, int((end - start).total_seconds() * 1000))
         iat_mean = sum(iats) / len(iats) if iats else 0.0
+        iat_std = (
+            math.sqrt(sum((x - iat_mean) ** 2 for x in iats) / len(iats)) if iats else 0.0
+        )
+        packets = max(1, flow["packets_sent"])
+        pkt_len_std = math.sqrt(
+            max(0.0, flow["len_sumsq"] / packets - (flow["bytes_sent"] / packets) ** 2)
+        )
         return {
             "src_ip": flow["src_ip"],
             "dst_ip": flow["dst_ip"],
@@ -108,8 +124,18 @@ class ScapyFlowMonitor:
             "packets_sent": flow["packets_sent"],
             "packets_recv": flow["packets_recv"],
             "iat_mean": iat_mean,
-            "iat_std": 0.0,
+            "iat_std": iat_std,
             "iat_max": max(iats) if iats else 0.0,
+            "iat_min": min(iats) if iats else 0.0,
             "fwd_iat_mean": iat_mean,
+            "fwd_iat_total": sum(iats) if iats else 0.0,
             "is_external_dst": flow.get("is_external_dst", False),
+            # Extended stats for the full (schema v4) feature set. Scapy sees
+            # every packet as one direction, so fwd mirrors the combined view.
+            "pkt_len_min": flow["len_min"] if flow["len_min"] is not None else 0.0,
+            "pkt_len_max": flow["len_max"],
+            "pkt_len_std": pkt_len_std,
+            "fwd_pkt_len_min": flow["len_min"] if flow["len_min"] is not None else 0.0,
+            "fwd_pkt_len_max": flow["len_max"],
+            "fwd_pkt_len_std": pkt_len_std,
         }

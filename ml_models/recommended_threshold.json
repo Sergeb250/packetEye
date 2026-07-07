@@ -1,75 +1,214 @@
 {
   "recommended": {
-    "threshold": 5.0,
-    "score": 0.0,
-    "benign_fp_rate": 0.0,
-    "attack_recall": 0.0,
-    "monday_fp_rate": 0.0,
-    "tuesday_recall": 0.0
+    "threshold": 5.5,
+    "precision": 0.7099,
+    "recall": 0.5157,
+    "f1": 0.5974,
+    "benign_fp_rate": 0.0413,
+    "attack_recall": 0.5157,
+    "selection": "max F1 with benign FP <= 10%"
   },
   "sweep": [
     {
+      "threshold": 3.0,
+      "precision": 0.4101,
+      "recall": 0.5563,
+      "f1": 0.4722,
+      "benign_fp_rate": 0.1624,
+      "attack_recall": 0.5563
+    },
+    {
+      "threshold": 3.25,
+      "precision": 0.4345,
+      "recall": 0.556,
+      "f1": 0.4878,
+      "benign_fp_rate": 0.146,
+      "attack_recall": 0.556
+    },
+    {
+      "threshold": 3.5,
+      "precision": 0.466,
+      "recall": 0.5557,
+      "f1": 0.5069,
+      "benign_fp_rate": 0.1283,
+      "attack_recall": 0.5557
+    },
+    {
+      "threshold": 3.75,
+      "precision": 0.4907,
+      "recall": 0.5551,
+      "f1": 0.5209,
+      "benign_fp_rate": 0.1162,
+      "attack_recall": 0.5551
+    },
+    {
+      "threshold": 4.0,
+      "precision": 0.5161,
+      "recall": 0.5539,
+      "f1": 0.5343,
+      "benign_fp_rate": 0.1055,
+      "attack_recall": 0.5539
+    },
+    {
+      "threshold": 4.25,
+      "precision": 0.5339,
+      "recall": 0.5506,
+      "f1": 0.5421,
+      "benign_fp_rate": 0.0963,
+      "attack_recall": 0.5506
+    },
+    {
+      "threshold": 4.5,
+      "precision": 0.5495,
+      "recall": 0.55,
+      "f1": 0.5497,
+      "benign_fp_rate": 0.0911,
+      "attack_recall": 0.55
+    },
+    {
+      "threshold": 4.75,
+      "precision": 0.5636,
+      "recall": 0.5494,
+      "f1": 0.5564,
+      "benign_fp_rate": 0.0864,
+      "attack_recall": 0.5494
+    },
+    {
       "threshold": 5.0,
-      "benign_fp_rate": 0.0,
-      "attack_recall": 0.0,
-      "monday_fp_rate": 0.0,
-      "tuesday_recall": 0.0
+      "precision": 0.5744,
+      "recall": 0.5488,
+      "f1": 0.5613,
+      "benign_fp_rate": 0.0826,
+      "attack_recall": 0.5488
+    },
+    {
+      "threshold": 5.25,
+      "precision": 0.6458,
+      "recall": 0.5455,
+      "f1": 0.5914,
+      "benign_fp_rate": 0.0578,
+      "attack_recall": 0.5455
     },
     {
       "threshold": 5.5,
-      "benign_fp_rate": 0.0,
-      "attack_recall": 0.0,
-      "monday_fp_rate": 0.0,
-      "tuesday_recall": 0.0
+      "precision": 0.7099,
+      "recall": 0.5157,
+      "f1": 0.5974,
+      "benign_fp_rate": 0.0413,
+      "attack_recall": 0.5157
+    },
+    {
+      "threshold": 5.75,
+      "precision": 0.7672,
+      "recall": 0.4554,
+      "f1": 0.5716,
+      "benign_fp_rate": 0.0278,
+      "attack_recall": 0.4554
     },
     {
       "threshold": 6.0,
-      "benign_fp_rate": 0.0,
-      "attack_recall": 0.0,
-      "monday_fp_rate": 0.0,
-      "tuesday_recall": 0.0
+      "precision": 0.8165,
+      "recall": 0.3871,
+      "f1": 0.5252,
+      "benign_fp_rate": 0.0178,
+      "attack_recall": 0.3871
+    },
+    {
+      "threshold": 6.25,
+      "precision": 0.8659,
+      "recall": 0.3615,
+      "f1": 0.5101,
+      "benign_fp_rate": 0.0123,
+      "attack_recall": 0.3615
     },
     {
       "threshold": 6.5,
-      "benign_fp_rate": 0.0,
-      "attack_recall": 0.0,
-      "monday_fp_rate": 0.0,
-      "tuesday_recall": 0.0
+      "precision": 0.9126,
+      "recall": 0.3393,
+      "f1": 0.4946,
+      "benign_fp_rate": 0.0067,
+      "attack_recall": 0.3393
+    },
+    {
+      "threshold": 6.75,
+      "precision": 0.9445,
+      "recall": 0.2101,
+      "f1": 0.3438,
+      "benign_fp_rate": 0.0029,
+      "attack_recall": 0.2101
     },
     {
       "threshold": 7.0,
-      "benign_fp_rate": 0.0,
-      "attack_recall": 0.0,
-      "monday_fp_rate": 0.0,
-      "tuesday_recall": 0.0
+      "precision": 0.8725,
+      "recall": 0.0391,
+      "f1": 0.0749,
+      "benign_fp_rate": 0.0011,
+      "attack_recall": 0.0391
+    },
+    {
+      "threshold": 7.25,
+      "precision": 0.4615,
+      "recall": 0.0018,
+      "f1": 0.0036,
+      "benign_fp_rate": 0.0006,
+      "attack_recall": 0.0018
     },
     {
       "threshold": 7.5,
-      "benign_fp_rate": 0.0,
-      "attack_recall": 0.0,
-      "monday_fp_rate": 0.0,
-      "tuesday_recall": 0.0
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "benign_fp_rate": 0.0002,
+      "attack_recall": 0.0
+    },
+    {
+      "threshold": 7.75,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "benign_fp_rate": 0.0001,
+      "attack_recall": 0.0
     },
     {
       "threshold": 8.0,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
       "benign_fp_rate": 0.0,
-      "attack_recall": 0.0,
-      "monday_fp_rate": 0.0,
-      "tuesday_recall": 0.0
+      "attack_recall": 0.0
+    },
+    {
+      "threshold": 8.25,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "benign_fp_rate": 0.0,
+      "attack_recall": 0.0
     },
     {
       "threshold": 8.5,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
       "benign_fp_rate": 0.0,
-      "attack_recall": 0.0,
-      "monday_fp_rate": 0.0,
-      "tuesday_recall": 0.0
+      "attack_recall": 0.0
+    },
+    {
+      "threshold": 8.75,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "benign_fp_rate": 0.0,
+      "attack_recall": 0.0
     },
     {
       "threshold": 9.0,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
       "benign_fp_rate": 0.0,
-      "attack_recall": 0.0,
-      "monday_fp_rate": 0.0,
-      "tuesday_recall": 0.0
+      "attack_recall": 0.0
     }
-  ]
+  ],
+  "calibrated": true
 }

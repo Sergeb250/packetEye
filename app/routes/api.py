@@ -31,10 +31,19 @@ from app.services.live.triage_registry import (
 )
 from app.services.live.session_utils import resolve_live_session_id
 from app.services.live.triage_inspector import deep_inspect_incident
+from app.services.live.triage_explain import explain_incident
+from app.services.live.live_investigation import (
+    get_live_alert_investigation,
+    investigate_live_alert_sync,
+    live_osint_target,
+)
+from app.services.escalation.draft import draft_escalation_email
+from app.services.escalation.email_service import send_escalation_email
+from app.services.integrations.store import get_discord_public_config, save_discord_config
 from app.services.llm.connectivity import probe_llm_connectivity
 from app.services.llm.suricata_rule_writer import generate_suricata_rules
 from app.services.live import suricata_manager
-from app.services.live.webhook_notifier import WebhookNotifier
+from app.services.live.webhook_notifier import WebhookNotifier, get_webhook_notifier
 from app.services.capture import orchestrator as capture_orchestrator
 from app.services.capture import ml_capture
 from app.services.capture import pcap_watcher
@@ -397,11 +406,11 @@ def live_start():
         return jsonify({"error": "ML baseline model not loaded. Run scripts/train_tracker.py first."}), 400
 
     analysis = create_live_session(config, eve_path=eve_path, interface=interface)
-    kickoff_live_monitor_current(analysis.id)
+    kickoff_live_monitor_current(analysis["id"])
 
     return jsonify(
         {
-            "session_id": analysis.id,
+            "session_id": analysis["id"],
             "status": "running",
             "mode": "suricata",
             "capture_started": capture_started,
@@ -422,10 +431,11 @@ def live_stop():
     stop_llm_packet_analysis()
     stop_live_monitor_task.delay(session_id)
 
-    analysis = Analysis.query.get(session_id)
-    if analysis:
-        analysis.status = "complete"
-        db.session.commit()
+    from app.services.streams import get_session_store
+
+    store = get_session_store()
+    if store:
+        store.update(session_id, {"status": "complete"})
 
     return jsonify({"session_id": session_id, "status": "stopped"})
 
@@ -506,6 +516,18 @@ def live_alerts():
         allowed = {s.strip() for s in source_q.split(",") if s.strip()}
         alerts = [a for a in alerts if (a.get("type") or "").lower() in allowed]
     return jsonify({"alerts": alerts, "count": len(alerts)})
+
+
+@api_bp.route("/llm/models", methods=["GET"])
+def llm_models():
+    from app.services.llm.stack import parse_chat_models
+
+    cfg = dict(current_app.config)
+    models = parse_chat_models(cfg)
+    return jsonify({
+        "default": cfg.get("LLM_MODEL") or models[0],
+        "models": models,
+    })
 
 
 @api_bp.route("/llm/test", methods=["POST"])
@@ -594,6 +616,147 @@ def live_triage_verdict():
     if not row:
         return jsonify({"error": "Incident not found"}), 404
     return jsonify({"ok": True, "incident": row})
+
+
+@api_bp.route("/live/triage/explain", methods=["POST"])
+@limiter.limit("40 per hour")
+def live_triage_explain():
+    data = request.get_json() or {}
+    session_id = data.get("session_id")
+    incident_id = data.get("incident_id")
+    if not session_id or not incident_id:
+        return jsonify({"error": "session_id and incident_id required"}), 400
+    result = explain_incident(dict(current_app.config), session_id, incident_id)
+    status = 200 if result.get("ok") else 503
+    return jsonify(result), status
+
+
+@api_bp.route("/live/osint/<session_id>/<path:target>", methods=["POST"])
+@limiter.limit("60 per hour")
+def live_osint(session_id, target):
+    body = request.get_json(silent=True) or {}
+    summarize_param = (request.args.get("summarize") or "").strip().lower()
+    detail_level = (body.get("detail_level") or request.args.get("detail") or "medium").strip().lower()
+    if detail_level not in ("brief", "medium", "detailed"):
+        detail_level = "medium"
+    if body.get("summarize") is False:
+        summarize = False
+    elif body.get("summarize"):
+        summarize = True
+    else:
+        summarize = summarize_param not in ("0", "false", "no")
+    result = live_osint_target(
+        dict(current_app.config),
+        session_id,
+        target,
+        summarize=summarize,
+        alert_context=body.get("alert_context"),
+        detail_level=detail_level,
+    )
+    if not result.get("ok"):
+        return jsonify({"error": result.get("error", "OSINT failed")}), 400
+    return jsonify(result)
+
+
+@api_bp.route("/live/investigate/alert/<session_id>/<alert_id>", methods=["GET", "POST"])
+@limiter.limit("30 per hour")
+def live_investigate_alert(session_id, alert_id):
+    if request.method == "GET":
+        result = get_live_alert_investigation(session_id, alert_id)
+        if not result.get("ok"):
+            return jsonify({"error": result.get("error")}), 404
+        return jsonify(result)
+    result = investigate_live_alert_sync(dict(current_app.config), session_id, alert_id)
+    if not result.get("ok"):
+        return jsonify({"error": result.get("error"), "investigation": result.get("investigation")}), 400
+    return jsonify(result), 202
+
+
+@api_bp.route("/escalation/config", methods=["GET"])
+def escalation_config():
+    cfg = dict(current_app.config)
+    return jsonify({
+        "smtp_enabled": cfg.get("SMTP_ENABLED", False),
+        "default_to": cfg.get("ESCALATION_DEFAULT_TO", ""),
+    })
+
+
+@api_bp.route("/integrations/config", methods=["GET"])
+def integrations_config():
+    cfg = dict(current_app.config)
+    discord = get_discord_public_config(cfg)
+    return jsonify({
+        "discord": discord,
+        "llm_configured": bool(cfg.get("LLM_API_KEY") or cfg.get("ZAI_API_KEY") or cfg.get("NVIDIA_API_KEY")),
+        "osint_configured": bool(cfg.get("VIRUSTOTAL_API_KEY") or cfg.get("ABUSEIPDB_API_KEY")),
+        "smtp_enabled": bool(cfg.get("SMTP_ENABLED")),
+    })
+
+
+@api_bp.route("/integrations/discord", methods=["PUT"])
+@limiter.limit("30 per hour")
+def integrations_discord_save():
+    data = request.get_json() or {}
+    try:
+        saved = save_discord_config(data, dict(current_app.config))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    public = get_discord_public_config(dict(current_app.config))
+    return jsonify({"ok": True, "discord": public, "saved": {
+        "enabled": saved["webhooks"]["discord"]["enabled"],
+        "severities": saved["webhooks"]["discord"]["severities"],
+        "sources": saved["webhooks"]["discord"]["sources"],
+        "ai_statuses": saved["webhooks"]["discord"]["ai_statuses"],
+        "rate_limit_per_minute": saved["webhooks"]["discord"]["rate_limit_per_minute"],
+    }})
+
+
+@api_bp.route("/integrations/discord/test", methods=["POST"])
+@limiter.limit("10 per hour")
+def integrations_discord_test():
+    result = WebhookNotifier(dict(current_app.config)).send_test()
+    if not result.get("ok"):
+        return jsonify({"error": result.get("error")}), 400
+    return jsonify({"ok": True, "message": "Test alert sent to Discord."})
+
+
+@api_bp.route("/escalation/draft", methods=["POST"])
+@limiter.limit("30 per hour")
+def escalation_draft():
+    data = request.get_json() or {}
+    result = draft_escalation_email(
+        dict(current_app.config),
+        context_type=data.get("context_type", "alert"),
+        session_id=data.get("session_id"),
+        alert_id=data.get("alert_id"),
+        incident_id=data.get("incident_id"),
+        detail_tier=data.get("detail_tier", "brief"),
+    )
+    if not result.get("ok"):
+        return jsonify({"error": result.get("error")}), 400
+    return jsonify(result)
+
+
+@api_bp.route("/escalation/send", methods=["POST"])
+@limiter.limit("20 per hour")
+def escalation_send():
+    data = request.get_json() or {}
+    to = data.get("to", "").strip()
+    subject = data.get("subject", "")
+    body = data.get("body", "")
+    cc = data.get("cc")
+    if not to or not body:
+        return jsonify({"error": "to and body required"}), 400
+    result = send_escalation_email(
+        dict(current_app.config),
+        to=to,
+        subject=subject,
+        body=body,
+        cc=cc,
+    )
+    if not result.get("ok"):
+        return jsonify({"error": result.get("error")}), 400
+    return jsonify(result)
 
 
 @limiter.exempt
@@ -895,10 +1058,17 @@ def chat():
         finding_id=data.get("finding_id"),
         flow_id=data.get("flow_id"),
         context_payload=data.get("context_payload"),
+        model=data.get("model"),
+        detail_tier=data.get("detail_tier", "auto"),
+        report_page=bool(data.get("report_page")),
     )
     if not result.get("ok"):
         return jsonify({"error": result.get("error")}), 400
-    return jsonify({"reply": result["reply"]})
+    return jsonify({
+        "reply": result["reply"],
+        "detail_tier": result.get("detail_tier"),
+        "model": result.get("model"),
+    })
 
 
 @api_bp.route("/webhook/test", methods=["POST"])

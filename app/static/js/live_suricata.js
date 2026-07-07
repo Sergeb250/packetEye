@@ -26,8 +26,9 @@
     let monitorSince = 0;
     let monitorPaused = false;
     let monitorRowCount = 0;
-    let monitorTimer = null;
-    const MAX_MONITOR_ROWS = 400;
+    let pollBusy = false;
+    const MAX_MONITOR_ROWS = 250;
+    const rowCache = new Map();
 
     function esc(v) {
         const d = document.createElement('div');
@@ -126,20 +127,8 @@
         return hay.includes(q);
     }
 
-    function appendMonitorRow(row) {
-        if (!els.monitorBody) return;
-        const q = (els.monitorFilter?.value || '').trim().toLowerCase();
-        if (!matchesFilter(row, q)) return;
-
-        const empty = els.monitorBody.querySelector('.empty-state');
-        if (empty) els.monitorBody.innerHTML = '';
-
-        const tr = document.createElement('tr');
-        tr.className = severityClass(row.severity);
-        tr.dataset.id = row.id;
-        tr.style.cursor = 'pointer';
-        tr.title = 'Click for details';
-        tr.innerHTML = `
+    function buildMonitorRowHtml(row) {
+        return `
             <td class="text-muted">${row.id}</td>
             <td class="font-monospace small">${fmtTime(row.timestamp)}</td>
             <td class="font-monospace small">${esc(fmtEndpoint(row.src_ip, row.src_port))}</td>
@@ -152,42 +141,76 @@
                 <button type="button" class="btn btn-outline-secondary btn-sm py-0 sur-act-inspect" title="Inspect"><i class="bi bi-eye"></i></button>
                 ${row.dst_ip ? `<button type="button" class="btn btn-outline-primary btn-sm py-0 sur-act-osint" data-ip="${esc(row.dst_ip)}" title="OSINT"><i class="bi bi-globe2"></i></button>` : ''}
                 <button type="button" class="btn btn-outline-secondary btn-sm py-0 sur-act-copy" title="Copy"><i class="bi bi-clipboard"></i></button>
-            </td>
-        `;
-        els.monitorBody.appendChild(tr);
-        tr.querySelector('.sur-act-inspect')?.addEventListener('click', (e) => {
-            e.stopPropagation();
-            if (typeof window.socShowEventDetail === 'function') window.socShowEventDetail(row);
-        });
-        tr.querySelector('.sur-act-osint')?.addEventListener('click', (e) => {
-            e.stopPropagation();
-            const ip = e.target.closest('.sur-act-osint')?.dataset.ip;
-            const sid = window.sessionId || window.liveConfig?.active_session?.session_id;
-            if (ip && sid && window.openOsintForTarget) window.openOsintForTarget(sid, ip);
-        });
-        tr.querySelector('.sur-act-copy')?.addEventListener('click', (e) => {
-            e.stopPropagation();
-            navigator.clipboard?.writeText(JSON.stringify(row));
-        });
-        tr.addEventListener('click', () => {
-            if (typeof window.socShowEventDetail === 'function') {
-                window.socShowEventDetail(row);
-                if (window.livePage !== 'overview') window.location.href = '/live/overview';
-            }
-        });
-        monitorRowCount += 1;
+            </td>`;
+    }
 
+    function trimMonitorRows() {
+        if (!els.monitorBody) return;
         while (els.monitorBody.rows.length > MAX_MONITOR_ROWS) {
+            const first = els.monitorBody.rows[0];
+            const id = first?.dataset?.id;
+            if (id) rowCache.delete(id);
             els.monitorBody.deleteRow(0);
         }
+    }
+
+    function appendMonitorRows(rows) {
+        if (!els.monitorBody || !rows.length) return;
+        const q = (els.monitorFilter?.value || '').trim().toLowerCase();
+        const filtered = rows.filter((row) => matchesFilter(row, q));
+        if (!filtered.length) return;
+
+        const empty = els.monitorBody.querySelector('.empty-state');
+        if (empty) els.monitorBody.innerHTML = '';
+
+        const fragment = document.createDocumentFragment();
+        filtered.forEach((row) => {
+            rowCache.set(String(row.id), row);
+            const tr = document.createElement('tr');
+            tr.className = severityClass(row.severity);
+            tr.dataset.id = row.id;
+            tr.style.cursor = 'pointer';
+            tr.title = 'Click for details';
+            tr.innerHTML = buildMonitorRowHtml(row);
+            fragment.appendChild(tr);
+            monitorRowCount += 1;
+        });
+        els.monitorBody.appendChild(fragment);
+        trimMonitorRows();
 
         if (els.autoscroll?.checked !== false && els.monitorWrap) {
             els.monitorWrap.scrollTop = els.monitorWrap.scrollHeight;
         }
     }
 
+    function handleMonitorClick(e) {
+        const tr = e.target.closest('tr[data-id]');
+        if (!tr || !els.monitorBody?.contains(tr)) return;
+        const row = rowCache.get(tr.dataset.id);
+        if (!row) return;
+
+        if (e.target.closest('.sur-act-inspect') || (!e.target.closest('.sur-act-osint') && !e.target.closest('.sur-act-copy'))) {
+            if (typeof window.socShowEventDetail === 'function') window.socShowEventDetail(row);
+            return;
+        }
+        if (e.target.closest('.sur-act-osint')) {
+            e.stopPropagation();
+            const ip = e.target.closest('.sur-act-osint')?.dataset.ip;
+            const sid = window.sessionId || window.liveConfig?.active_session?.session_id;
+            if (ip && sid && window.openOsintForTarget) {
+                window.openOsintForTarget(sid, ip, { live: true });
+            }
+            return;
+        }
+        if (e.target.closest('.sur-act-copy')) {
+            e.stopPropagation();
+            navigator.clipboard?.writeText(JSON.stringify(row));
+        }
+    }
+
     async function pollMonitor() {
-        if (monitorPaused || !els.monitorBody) return;
+        if (monitorPaused || pollBusy || !els.monitorBody) return;
+        pollBusy = true;
         try {
             const res = await fetch(`/api/suricata/monitor?since=${monitorSince}`);
             if (!res.ok) return;
@@ -208,24 +231,27 @@
                 }
             }
 
-            events.forEach((ev) => {
-                appendMonitorRow(ev);
-                monitorSince = Math.max(monitorSince, ev.id || 0);
-            });
+            if (events.length) {
+                appendMonitorRows(events);
+                monitorSince = Math.max(monitorSince, ...events.map((ev) => ev.id || 0));
+            }
 
             if (els.monitorCount) {
-                els.monitorCount.textContent = `${monitorRowCount} row${monitorRowCount === 1 ? '' : 's'}`;
+                els.monitorCount.textContent = `${Math.min(monitorRowCount, MAX_MONITOR_ROWS)} row${monitorRowCount === 1 ? '' : 's'}`;
             }
         } catch {
             /* ignore */
+        } finally {
+            pollBusy = false;
         }
     }
 
     function clearMonitor() {
         monitorSince = 0;
         monitorRowCount = 0;
+        rowCache.clear();
         if (els.monitorBody) {
-            els.monitorBody.innerHTML = '<tr><td colspan="8" class="empty-state py-4 text-center text-muted"><i class="bi bi-trash"></i> Monitor cleared.</td></tr>';
+            els.monitorBody.innerHTML = '<tr><td colspan="9" class="empty-state py-4 text-center text-muted"><i class="bi bi-trash"></i> Monitor cleared.</td></tr>';
         }
         if (els.monitorCount) els.monitorCount.textContent = '0 rows';
     }
@@ -298,19 +324,24 @@
     if (els.btnMonitorClear) els.btnMonitorClear.addEventListener('click', clearMonitor);
     if (els.btnExport) {
         els.btnExport.addEventListener('click', () => {
-            window.open(`/api/suricata/export?since=0&format=csv`, '_blank');
+            window.open('/api/suricata/export?since=0&format=csv', '_blank');
         });
     }
-    if (els.monitorFilter) {
-        els.monitorFilter.addEventListener('input', () => {
-            /* re-filter would need row cache; filter applies to new rows only */
-        });
+    if (els.monitorBody) {
+        els.monitorBody.addEventListener('click', handleMonitorClick);
     }
 
     document.addEventListener('DOMContentLoaded', () => {
         refreshDiagnostics();
-        pollMonitor();
-        monitorTimer = setInterval(pollMonitor, 2000);
+        LivePollHub.register('suricata-monitor', pollMonitor, {
+            interval: 5000,
+            tabs: ['suricata'],
+        });
+        LivePollHub.register('suricata-diagnostics', refreshDiagnostics, {
+            interval: 30000,
+            tabs: ['suricata'],
+            immediate: false,
+        });
     });
 
     window.suricataPage = {

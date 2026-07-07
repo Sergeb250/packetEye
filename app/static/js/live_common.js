@@ -1,5 +1,81 @@
+// ---------------------------------------------------------------------------
+// LivePollHub — one scheduler for every live poller.
+// Each /live/* tab is its own page load, but all tab panes' DOM exists on
+// every page, so without gating each module polls its endpoints everywhere.
+// A job runs only when its tab is the active one (window.livePage), the
+// browser tab is visible, and its previous run has finished. fetchJSON()
+// briefly caches status GETs so modules sharing an endpoint reuse a request.
+// ---------------------------------------------------------------------------
+window.LivePollHub = (function () {
+    const jobs = new Map();
+    const responseCache = new Map();
+    let timer = null;
+
+    function activeTab() {
+        return window.livePage || 'overview';
+    }
+
+    function tick() {
+        if (document.visibilityState === 'hidden') return;
+        const tab = activeTab();
+        const now = Date.now();
+        jobs.forEach((job) => {
+            if (job.busy || now < job.nextAt) return;
+            if (job.tabs && !job.tabs.includes(tab)) return;
+            job.busy = true;
+            Promise.resolve()
+                .then(job.run)
+                .catch(() => {})
+                .finally(() => {
+                    job.busy = false;
+                    job.nextAt = Date.now() + job.interval;
+                });
+        });
+    }
+
+    function register(name, run, { interval = 3000, tabs = null, immediate = true } = {}) {
+        jobs.set(name, {
+            run,
+            interval,
+            tabs,
+            busy: false,
+            nextAt: immediate ? 0 : Date.now() + interval,
+        });
+        if (!timer) timer = setInterval(tick, 500);
+        if (immediate) tick();
+    }
+
+    function unregister(name) {
+        jobs.delete(name);
+    }
+
+    function fetchJSON(url, ttlMs = 0) {
+        const cached = responseCache.get(url);
+        if (cached && Date.now() - cached.at < ttlMs) return cached.promise;
+        const promise = fetch(url)
+            .then((r) => (r.ok ? r.json() : null))
+            .catch(() => null);
+        responseCache.set(url, { at: Date.now(), promise });
+        return promise;
+    }
+
+    return { register, unregister, fetchJSON, activeTab };
+})();
+
+/** Parse JSON responses safely — surfaces HTML 404 instead of JSON.parse errors. */
+window.fetchJsonOrThrow = async function fetchJsonOrThrow(res) {
+    const text = await res.text();
+    try {
+        return JSON.parse(text);
+    } catch {
+        const msg = text.startsWith('<')
+            ? 'Server returned HTML (wrong endpoint or 404)'
+            : text.slice(0, 200);
+        throw new Error(msg);
+    }
+};
+
 let sessionId = null;
-let pollTimer = null;
 let alertSince = 0;
 let totalAlertsShown = 0;
 let liveConfig = {};
@@ -301,12 +377,10 @@ function showPathFeedback(message, type = 'muted') {
 
 async function syncEveFromCapture() {
     try {
-        const [capRes, surRes] = await Promise.all([
-            fetch('/api/capture/status'),
-            fetch('/api/suricata/status'),
+        const [s, sur] = await Promise.all([
+            LivePollHub.fetchJSON('/api/capture/status', 2500).then((d) => d || {}),
+            LivePollHub.fetchJSON('/api/suricata/status', 2500).then((d) => d || {}),
         ]);
-        const s = capRes.ok ? await capRes.json() : {};
-        const sur = surRes.ok ? await surRes.json() : {};
         const path = sur.eve?.path || s.suricata?.eve?.path || liveConfig.capture?.eve_path || liveConfig.default_eve_path || '';
         const eveInput = document.getElementById('evePathInput');
         if (path && els.evePath) {
@@ -469,9 +543,10 @@ function resumeSession(status) {
     if (els.btnStart) els.btnStart.disabled = true;
     if (els.btnStop) els.btnStop.disabled = false;
     setStatus('running', 'bg-success', true);
-    if (pollTimer) clearInterval(pollTimer);
-    pollTimer = setInterval(pollLive, 2000);
-    if (typeof window.socLoadAlerts === 'function') window.socLoadAlerts();
+    LivePollHub.register('live-status', pollLive, { interval: 3000, tabs: ['overview', 'ml'] });
+    if (window.livePage === 'overview' && typeof window.socLoadAlerts === 'function') {
+        window.socLoadAlerts();
+    }
 }
 
 async function startMonitor() {
@@ -558,11 +633,11 @@ async function startMonitor() {
         alertSince = 0;
         totalAlertsShown = 0;
         updateFeedCount();
-        if (pollTimer) clearInterval(pollTimer);
-        pollTimer = setInterval(pollLive, 2000);
-        pollLive();
+        LivePollHub.register('live-status', pollLive, { interval: 3000, tabs: ['overview', 'ml'] });
         refreshCapture();
-        if (typeof window.socLoadAlerts === 'function') window.socLoadAlerts();
+        if (window.livePage === 'overview' && typeof window.socLoadAlerts === 'function') {
+            window.socLoadAlerts();
+        }
         document.getElementById('alertFeedSection')?.scrollIntoView({ behavior: 'smooth' });
     } catch {
         showPathFeedback('Network error — could not start monitor.', 'danger');
@@ -585,8 +660,7 @@ async function stopMonitor() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ session_id: sessionId }),
         });
-        if (pollTimer) clearInterval(pollTimer);
-        pollTimer = null;
+        LivePollHub.unregister('live-status');
         sessionId = null;
         window.sessionId = null;
         if (els.btnStart) els.btnStart.disabled = false;
@@ -789,7 +863,6 @@ const sur = {
 };
 
 let suricataEvePath = '';
-let suricataTimer = null;
 
 function surFeedback(message, type = 'muted') {
     if (!sur.feedback) return;
@@ -808,9 +881,8 @@ function formatBytes(bytes) {
 async function refreshSuricata() {
     if (!sur.badge) return;
     try {
-        const res = await fetch('/api/suricata/status');
-        if (!res.ok) throw new Error();
-        const s = await res.json();
+        const s = await LivePollHub.fetchJSON('/api/suricata/status', 2500);
+        if (!s) throw new Error('suricata status unavailable');
 
         sur.badge.textContent = s.running ? 'running' : s.installed ? 'stopped' : 'not installed';
         sur.badge.className = `badge ${s.running ? 'bg-success' : s.installed ? 'bg-secondary' : 'bg-danger'}`;
@@ -1123,7 +1195,6 @@ const cap = {
     capChunks: document.getElementById('capChunks'),
     capWatcher: document.getElementById('capWatcher'),
 };
-let captureTimer = null;
 
 function capFeedback(message, type = 'muted') {
     if (!cap.feedback) return;
@@ -1135,9 +1206,8 @@ function capFeedback(message, type = 'muted') {
 async function refreshCapture() {
     if (!cap.badge) return;
     try {
-        const res = await fetch('/api/capture/status');
-        if (!res.ok) throw new Error();
-        const s = await res.json();
+        const s = await LivePollHub.fetchJSON('/api/capture/status', 2500);
+        if (!s) throw new Error('capture status unavailable');
         captureStoppable = Boolean(s.running && s.stoppable);
 
         if (s.external_suricata && !s.running) {
@@ -1250,10 +1320,7 @@ async function stopCapture() {
     });
     if (result?.ok) {
         capFeedback('Capture stopped.', 'muted');
-        if (pollTimer) {
-            clearInterval(pollTimer);
-            pollTimer = null;
-        }
+        LivePollHub.unregister('live-status');
         sessionId = null;
         window.sessionId = null;
         if (els.btnStop) els.btnStop.disabled = true;
@@ -1661,20 +1728,23 @@ document.addEventListener('DOMContentLoaded', async () => {
     await loadInterfaces();
 
     if (sur.badge) {
-        refreshSuricata();
-        loadRules();
-        suricataTimer = setInterval(refreshSuricata, 10000);
+        // Suricata panel elements live in the (hidden elsewhere) suricata pane.
+        LivePollHub.register('suricata-status', refreshSuricata, { interval: 10000, tabs: ['suricata'] });
+        if (LivePollHub.activeTab() === 'suricata') loadRules();
     }
     if (cap.badge) {
-        refreshCapture();
-        captureTimer = setInterval(refreshCapture, 5000);
+        LivePollHub.register('capture-status', refreshCapture, { interval: 5000, tabs: ['capture'] });
     }
     if (document.getElementById('socSensorHealth')) {
         /* polled by live_soc.js */
     }
     if (document.getElementById('mlCaptureBadge')) {
-        syncEveFromCapture();
-        setInterval(syncEveFromCapture, 5000);
+        // Hero badge is global — runs on every tab, but shares its status
+        // fetches with the other pollers through the hub's TTL cache.
+        LivePollHub.register('eve-sync', syncEveFromCapture, {
+            interval: 8000,
+            tabs: ['overview', 'capture', 'suricata', 'ml'],
+        });
     }
     if (els.btnStart || els.alertFeed || document.getElementById('liveStatus')) {
         if (document.getElementById('liveStatus')) setStatus('idle', 'bg-secondary', false);
@@ -1794,22 +1864,30 @@ async function investigateFinding(findingId) {
     if (!findingId || !investigateBody) return;
     showInvestigatePanel();
     renderInvestigation({ status: 'running' });
+    const sid = sessionId || window.sessionId || liveConfig?.active_session?.session_id;
+    const useLive = Boolean(sid && window.livePage);
+    const postUrl = useLive
+        ? `/api/live/investigate/alert/${encodeURIComponent(sid)}/${encodeURIComponent(findingId)}`
+        : `/api/investigate/finding/${findingId}`;
+    const getUrl = useLive ? postUrl : `/api/investigate/finding/${findingId}`;
     try {
-        await fetch(`/api/investigate/finding/${findingId}`, { method: 'POST' });
+        await fetch(postUrl, { method: 'POST' });
     } catch {
         renderInvestigation({ status: 'failed', error: 'could not start investigation' });
         return;
     }
-    // Poll for results.
     let tries = 0;
     const poll = setInterval(async () => {
         tries += 1;
         try {
-            const res = await fetch(`/api/investigate/finding/${findingId}`);
+            const res = await fetch(getUrl);
             if (res.ok) {
-                const data = await res.json();
-                renderInvestigation(data.investigation);
-                if (['complete', 'failed'].includes(data.investigation?.status) || tries > 20) {
+                const data = window.fetchJsonOrThrow
+                    ? await window.fetchJsonOrThrow(res)
+                    : await res.json();
+                const inv = data.investigation;
+                renderInvestigation(inv);
+                if (['complete', 'failed'].includes(inv?.status) || tries > 20) {
                     clearInterval(poll);
                 }
             }

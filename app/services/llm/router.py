@@ -5,10 +5,14 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from app.services.llm.provider import parse_json_response
-from app.services.llm.rate_limit import note_failure, provider_call_slot, wait_if_backoff
+from app.services.llm.rate_limit import (
+    is_provider_blocked,
+    llm_call_slot,
+    note_failure,
+    wait_if_backoff,
+)
 from app.services.llm.stack import build_live_stack
 
 logger = logging.getLogger(__name__)
@@ -47,7 +51,7 @@ class ModelRouter:
         label = getattr(prov, "label", name)
         wait_if_backoff(label)
         try:
-            with provider_call_slot(label):
+            with llm_call_slot(label):
                 raw = prov._complete_inner(system, user, temperature)
                 if raw and raw.strip() not in ("", "{}"):
                     raw = raw.strip()
@@ -71,27 +75,46 @@ class ModelRouter:
         *,
         temperature: float = 0.2,
         parallel: bool = False,
+        try_all: bool = False,
+        exclude: set[str] | None = None,
     ) -> tuple[dict | None, dict[str, dict], list[str]]:
-        """Single best result + all model outputs + errors."""
+        """Single best result + all model outputs + errors.
+
+        Providers sitting in a rate-limit/credit backoff window are skipped
+        instead of slept on — a 402-parked OpenRouter must not stall live
+        triage. `exclude` drops models that already answered (verify pass).
+        `try_all` walks every model one-at-a-time (connectivity / triage test).
+        `parallel` is kept for compatibility but also runs sequentially so
+        three providers never hit their APIs at once.
+        """
         prefs = TASK_PREFERENCES.get(task_type, list(self.stack.keys()))
         ordered = [n for n in prefs if n in self.stack]
         ordered.extend(n for n in self.stack if n not in ordered)
+        if exclude:
+            ordered = [n for n in ordered if n not in exclude]
 
         model_outputs: dict[str, dict] = {}
         errors: list[str] = []
 
-        if parallel and len(ordered) > 1:
-            with ThreadPoolExecutor(max_workers=min(3, len(ordered))) as pool:
-                futures = {
-                    pool.submit(self._call_model, name, system, user, temperature): name
-                    for name in ordered
-                }
-                for fut in as_completed(futures):
-                    name, parsed, err = fut.result()
-                    if parsed:
-                        model_outputs[name] = parsed
-                    if err:
-                        errors.append(f"{name}: {err}")
+        available = [
+            n for n in ordered
+            if not is_provider_blocked(getattr(self.stack.get(n), "label", n))
+        ]
+        skipped = [n for n in ordered if n not in available]
+        if skipped:
+            errors.append(f"skipped (backoff): {', '.join(skipped)}")
+        ordered = available
+        if not ordered:
+            return None, model_outputs, errors
+
+        run_all = try_all or parallel
+        if run_all:
+            for name in ordered:
+                _, parsed, err = self._call_model(name, system, user, temperature)
+                if parsed:
+                    model_outputs[name] = parsed
+                if err:
+                    errors.append(f"{name}: {err}")
         else:
             for name in ordered:
                 _, parsed, err = self._call_model(name, system, user, temperature)
@@ -115,13 +138,13 @@ class ModelRouter:
         *,
         temperature: float = 0.1,
     ) -> tuple[dict[str, dict], list[str]]:
-        """Run all configured models in parallel (each uses its own provider slot)."""
+        """Run every configured model sequentially (one global LLM slot)."""
         _, outputs, errors = self.complete_json(
             "live_triage",
             system,
             user,
             temperature=temperature,
-            parallel=True,
+            try_all=True,
         )
         return outputs, errors
 

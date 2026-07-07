@@ -31,7 +31,8 @@
         </div>
         <div class="col-md-9">
             <div class="card p-3">
-                <p>{{ report.executive_summary or (analysis.summary_json or {}).get('executive_summary', 'No summary available.') }}</p>
+                <div id="execSummary" class="chat-markdown report-markdown"></div>
+                <template class="md-source" id="execSummarySrc">{{ report.executive_summary or (analysis.summary_json or {}).get('executive_summary', 'No summary available.') }}</template>
                 <div class="row g-2 mt-2" id="reportMetricsBadges">
                     <div class="col"><span class="badge bg-secondary" id="metricFlows">{{ (report.metrics or {}).get('total_flows', analysis.total_flows) }} flows</span></div>
                     <div class="col"><span class="badge bg-secondary" id="metricExternalIps">{{ (report.metrics or {}).get('unique_external_ips', 0) }} external IPs</span></div>
@@ -66,7 +67,8 @@
             </h2>
             <div id="f{{ loop.index }}" class="accordion-collapse collapse" data-bs-parent="#findingsAccordion">
                 <div class="accordion-body">
-                    <p>{{ f.llm_explanation or f.description }}</p>
+                    <div class="chat-markdown report-markdown finding-explanation"></div>
+                    <template class="md-source">{{ f.llm_explanation or f.description or '' }}</template>
                     {% if f.mitre_tactic %}<p><strong>MITRE:</strong> {{ f.mitre_tactic }} / {{ f.mitre_technique }}</p>{% endif %}
                     {% if f.recommendation %}<div class="alert alert-info">{{ f.recommendation }}</div>{% endif %}
                     <div class="d-flex flex-wrap gap-2">
@@ -224,4 +226,50 @@ const analysisId = '{{ analysis.id }}';
 {% include "partials/threat_map_modal.html" %}
 <script src="{{ url_for('static', filename='js/osint_detail.js') }}"></script>
 <script src="{{ url_for('static', filename='js/investigate.js') }}"></script>
+<script>
+(function () {
+    function renderMarkdownEl(el, raw) {
+        if (!raw) return;
+        if (typeof marked !== 'undefined') {
+            marked.setOptions({ gfm: true, breaks: true });
+            let html = marked.parse(raw);
+            if (typeof DOMPurify !== 'undefined') {
+                html = DOMPurify.sanitize(html);
+            }
+            el.innerHTML = html;
+        } else {
+            el.textContent = raw;
+        }
+    }
+
+    document.querySelectorAll('.report-markdown').forEach((el) => {
+        const tpl = el.nextElementSibling;
+        const raw = tpl && tpl.classList.contains('md-source') ? tpl.textContent : '';
+        renderMarkdownEl(el, raw);
+    });
+    const execSrc = document.getElementById('execSummarySrc');
+    const execEl = document.getElementById('execSummary');
+    if (execSrc && execEl) {
+        renderMarkdownEl(execEl, execSrc.textContent);
+    }
+
+    async function renderReportMermaid() {
+        if (typeof mermaid === 'undefined') return;
+        document.querySelectorAll('.report-markdown pre code.language-mermaid, .report-markdown code.language-mermaid').forEach((code) => {
+            const parent = code.closest('pre') || code.parentElement;
+            if (!parent || parent.dataset.mermaidDone) return;
+            parent.dataset.mermaidDone = '1';
+            const mount = document.createElement('div');
+            mount.className = 'chat-mermaid mermaid';
+            mount.textContent = code.textContent || '';
+            parent.replaceWith(mount);
+        });
+        try {
+            await mermaid.run({ querySelector: '.report-markdown .mermaid' });
+        } catch { /* optional */ }
+    }
+
+    renderReportMermaid();
+})();
+</script>
 {% endblock %}

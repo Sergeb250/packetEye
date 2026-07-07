@@ -2,20 +2,18 @@
 
 import logging
 import threading
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from flask import current_app
-
-from app.extensions import db
-from app.models.analysis import Analysis, Flow
 from app.services.detection.ml_engine import MLEngine
 from app.services.live.alert_service import AlertService
 from app.services.live.correlation import LiveCorrelator
 from app.services.live.suricata_consumer import SuricataConsumer
 from app.services.live.scapy_flow_monitor import ScapyFlowMonitor
 from app.services.detection.engine import WhitelistEngine
-from app.services.live.webhook_notifier import WebhookNotifier
+from app.services.live.webhook_notifier import get_webhook_notifier
+from app.services.streams import get_session_store
 
 logger = logging.getLogger(__name__)
 
@@ -28,8 +26,9 @@ class LiveMonitor:
     def __init__(self, config: dict, session_id: str):
         self.config = config
         self.session_id = session_id
-        analysis = Analysis.query.get(session_id)
-        summary = (analysis.summary_json or {}) if analysis else {}
+        store = get_session_store()
+        analysis = store.get(session_id) if store else None
+        summary = (analysis.get("summary_json") or {}) if analysis else {}
         source = summary.get("capture_source") or summary.get("source_mode") or "suricata"
         self.source = source
         self.lab_mode = bool(config.get("CAPTURE_LAB_ENABLED"))
@@ -57,13 +56,13 @@ class LiveMonitor:
             max_flows=int(config.get("MAX_FLOWS_ML_SCORING", 50000)),
             train_on_pcap_fallback=config.get("ML_TRAIN_ON_PCAP_FALLBACK", False),
         )
-        webhook = WebhookNotifier(config)
+        webhook = get_webhook_notifier(config)
         whitelist = None if self.lab_mode else WhitelistEngine(Path(config.get("WHITELIST_PATH", "")))
         self.alerts = AlertService(
             session_id,
             rate_limit_per_minute=int(config.get("LIVE_ALERT_RATE_LIMIT", 60)),
             threshold=ml_threshold,
-            webhook=webhook if webhook.enabled else None,
+            webhook=webhook,
             whitelist=whitelist,
             ml_strict_c2_filter=not self.lab_mode,
         )
@@ -85,14 +84,6 @@ class LiveMonitor:
             register_from_alert(self.session_id, alert)
         except Exception as exc:
             logger.debug("Triage registry skip: %s", exc)
-        if (
-            self.auto_investigate
-            and alert.get("finding_id")
-            and alert.get("severity") in ("high", "critical")
-        ):
-            from app.services.investigation.service import kickoff_investigation
-
-            kickoff_investigation(current_app._get_current_object(), alert["finding_id"])
 
     def process_batch(self) -> int:
         if self.scapy_monitor:
@@ -112,57 +103,36 @@ class LiveMonitor:
                 self._update_session_stats()
             return 0
 
-        flow_rows = []
         for f in flows:
-            flow_row = Flow(
-                analysis_id=self.session_id,
-                src_ip=f["src_ip"],
-                dst_ip=f["dst_ip"],
-                src_port=f.get("src_port", 0),
-                dst_port=f.get("dst_port", 0),
-                protocol=f.get("protocol", "TCP"),
-                start_time=f.get("start_time"),
-                end_time=f.get("end_time"),
-                duration_ms=f.get("duration_ms", 0),
-                bytes_sent=f.get("bytes_sent", 0),
-                bytes_recv=f.get("bytes_recv", 0),
-                packets_sent=f.get("packets_sent", 0),
-                packets_recv=f.get("packets_recv", 0),
-                iat_mean=f.get("iat_mean", 0),
-                anomaly_score=0,
-            )
-            db.session.add(flow_row)
-            flow_rows.append(flow_row)
-
-        db.session.flush()
-        for f, flow_row in zip(flows, flow_rows):
-            f["id"] = flow_row.id
-
-        db.session.commit()
+            f["id"] = str(uuid.uuid4())
 
         results = self.ml.score_flows(flows)
-        rows_by_id = {row.id: row for row in flow_rows}
         for f, result in zip(flows, results):
-            flow_row = rows_by_id.get(f["id"])
-            if flow_row:
-                flow_row.anomaly_score = result.get("anomaly_score", 0)
             self._post_alert(self.alerts.emit(f, result))
             for match in self.correlator.add_ml(f, result):
                 self._post_alert(self.alerts.emit_correlation(match))
 
-        db.session.commit()
         self._flows_processed += len(flows)
         self._update_session_stats()
 
         return len(flows)
 
     def _update_session_stats(self) -> None:
-        analysis = Analysis.query.get(self.session_id)
-        if analysis:
-            analysis.total_flows = self._flows_processed
-            analysis.total_findings = self._alerts_count
-            analysis.progress_pct = min(99, analysis.progress_pct + 1)
-            db.session.commit()
+        store = get_session_store()
+        if not store:
+            return
+        record = store.get(self.session_id)
+        if record:
+            progress = min(99, int(record.get("progress_pct") or 0) + 1)
+            store.update(
+                self.session_id,
+                {
+                    "total_flows": self._flows_processed,
+                    "total_findings": self._alerts_count,
+                    "progress_pct": progress,
+                    "status": "analyzing",
+                },
+            )
 
     def run_loop(self, stop_event: threading.Event, poll_interval: float = 2.0):
         logger.info("Live monitor started for session %s", self.session_id)
@@ -173,12 +143,16 @@ class LiveMonitor:
                 logger.exception("Live monitor batch error: %s", exc)
             stop_event.wait(poll_interval)
 
-        analysis = Analysis.query.get(self.session_id)
-        if analysis:
-            analysis.status = "complete"
-            analysis.completed_at = datetime.now(timezone.utc)
-            analysis.progress_pct = 100
-            db.session.commit()
+        store = get_session_store()
+        if store:
+            store.update(
+                self.session_id,
+                {
+                    "status": "complete",
+                    "completed_at": datetime.now(timezone.utc).isoformat(),
+                    "progress_pct": 100,
+                },
+            )
         logger.info("Live monitor stopped for session %s", self.session_id)
 
 
@@ -219,13 +193,13 @@ def stop_monitor(session_id: str) -> bool:
 
 def rebind_eve(session_id: str, eve_path: str) -> bool:
     """Point a running live session at a new EVE file without restarting Suricata."""
-    analysis = Analysis.query.get(session_id)
-    if not analysis:
+    store = get_session_store()
+    if not store or not store.get(session_id):
         return False
-    summary = dict(analysis.summary_json or {})
+    record = store.get(session_id)
+    summary = dict((record or {}).get("summary_json") or {})
     summary["eve_path"] = eve_path
-    analysis.summary_json = summary
-    db.session.commit()
+    store.update(session_id, {"summary_json": summary})
     mon = _monitor_instances.get(session_id)
     if mon and mon.consumer:
         mon.consumer.rebind(eve_path)
@@ -235,12 +209,13 @@ def rebind_eve(session_id: str, eve_path: str) -> bool:
 def monitor_status(session_id: str) -> dict:
     thread = _active_monitors.get(session_id)
     running = thread is not None and thread.is_alive()
-    analysis = Analysis.query.get(session_id)
+    store = get_session_store()
+    analysis = store.get(session_id) if store else None
     return {
         "session_id": session_id,
         "running": running,
-        "status": analysis.status if analysis else "unknown",
-        "total_flows": analysis.total_flows if analysis else 0,
-        "total_findings": analysis.total_findings if analysis else 0,
-        "progress_pct": analysis.progress_pct if analysis else 0,
+        "status": analysis.get("status", "unknown") if analysis else "unknown",
+        "total_flows": analysis.get("total_flows", 0) if analysis else 0,
+        "total_findings": analysis.get("total_findings", 0) if analysis else 0,
+        "progress_pct": analysis.get("progress_pct", 0) if analysis else 0,
     }

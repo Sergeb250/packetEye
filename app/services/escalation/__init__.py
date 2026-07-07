@@ -1,0 +1,1 @@
+"""Alert escalation via email."""

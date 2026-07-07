@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Evaluate baseline model on CIC-IDS2017 labeled data."""
 
+import argparse
 import json
 import logging
 import sys
@@ -22,7 +23,11 @@ from sklearn.metrics import (
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from app.services.detection.features import FEATURE_NAMES, build_feature_matrix_from_cic, load_feature_schema
+from app.services.detection.features import (
+    build_cic_matrix,
+    feature_set_of,
+    load_feature_schema_info,
+)
 from app.services.detection.ml_engine import ScoreCalibrator
 from scripts.cic_loader import load_cic_flows
 from scripts.cic_preprocess import clean_cic_dataframe, is_attack_label
@@ -49,8 +54,11 @@ def resolve_threshold() -> float:
     return DEFAULT_THRESHOLD
 
 
-def evaluate_split(model, scaler, feature_names, df, split_name, calibrator=None, threshold=DEFAULT_THRESHOLD):
-    X_df = build_feature_matrix_from_cic(df)
+def evaluate_split(
+    model, scaler, feature_names, df, split_name,
+    calibrator=None, threshold=DEFAULT_THRESHOLD, feature_set="legacy",
+):
+    X_df = build_cic_matrix(df, feature_set)
     mask = X_df[feature_names].notna().all(axis=1).to_numpy()
     df = df.iloc[mask].reset_index(drop=True)
     X = X_df.loc[mask, feature_names].values.astype(float)
@@ -87,8 +95,13 @@ def run_benchmark(
     max_eval_rows: int = MAX_EVAL_ROWS,
     random_state: int = 42,
     output_path: Path | None = None,
+    feature_set: str = "auto",
 ) -> dict:
-    """Evaluate model on stratified all-days labeled sample."""
+    """Evaluate model on stratified all-days labeled sample.
+
+    feature_set "auto" follows the saved feature_schema.json (or the passed
+    feature_names) so evaluation always matches the trained model.
+    """
     model_path = ML_DIR / "isolation_forest_base.pkl"
     scaler_path = ML_DIR / "feature_scaler.pkl"
     schema_path = ML_DIR / "feature_schema.json"
@@ -100,18 +113,25 @@ def run_benchmark(
     if scaler is None:
         scaler = joblib.load(scaler_path)
     if feature_names is None:
-        feature_names = load_feature_schema(schema_path)
+        info = load_feature_schema_info(schema_path)
+        feature_names = info["feature_names"]
+        if feature_set == "auto":
+            feature_set = info["feature_set"]
+    elif feature_set == "auto":
+        feature_set = feature_set_of(feature_names)
 
     calibrator = ScoreCalibrator.load(ML_DIR / "score_calibration.json")
     threshold = resolve_threshold()
     logger.info(
-        "Evaluating at calibrated threshold %.2f (calibrated=%s)",
+        "Evaluating at calibrated threshold %.2f (calibrated=%s, feature_set=%s, %d features)",
         threshold,
         calibrator.is_calibrated,
+        feature_set,
+        len(feature_names),
     )
 
     logger.info("Loading CIC-IDS2017 for evaluation...")
-    df = load_cic_flows(day=None)
+    df = load_cic_flows(day=None, feature_set=feature_set)
     note = "Evaluation uses a stratified sample of all labeled flows (all days)."
     if len(df) > max_eval_rows:
         label_col = "Label" if "Label" in df.columns else "attack_label"
@@ -127,15 +147,17 @@ def run_benchmark(
         df = pd.concat([benign, attacks], ignore_index=True)
         logger.info("Eval subsample: %d rows (%d attacks, %d benign)", len(df), len(attacks), len(benign))
 
-    df = clean_cic_dataframe(df)
+    df = clean_cic_dataframe(df, feature_set=feature_set)
 
     results = {
         "evaluated_at": datetime.now(timezone.utc).isoformat(),
         "note": note,
         "threshold": threshold,
+        "feature_set": feature_set,
         "score_calibrated": calibrator.is_calibrated,
         "overall": evaluate_split(
-            model, scaler, feature_names, df, "all_labeled", calibrator=calibrator, threshold=threshold
+            model, scaler, feature_names, df, "all_labeled",
+            calibrator=calibrator, threshold=threshold, feature_set=feature_set,
         ),
     }
 
@@ -146,14 +168,16 @@ def run_benchmark(
             continue
         name = str(label)
         by_label[name] = evaluate_split(
-            model, scaler, feature_names, group, name, calibrator=calibrator, threshold=threshold
+            model, scaler, feature_names, group, name,
+            calibrator=calibrator, threshold=threshold, feature_set=feature_set,
         )
     results["by_attack_label"] = by_label
 
     attack_rows = df[df[label_col].astype(str).str.upper() != "BENIGN"]
     if len(attack_rows) >= 50:
         attack_result = evaluate_split(
-            model, scaler, feature_names, attack_rows, "all_attacks", calibrator=calibrator, threshold=threshold
+            model, scaler, feature_names, attack_rows, "all_attacks",
+            calibrator=calibrator, threshold=threshold, feature_set=feature_set,
         )
         results["attack_only"] = attack_result
         results["summary"] = {
@@ -192,8 +216,16 @@ def run_benchmark(
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--feature-set",
+        choices=["auto", "legacy", "full"],
+        default="auto",
+        help="auto follows the saved feature_schema.json",
+    )
+    args = parser.parse_args()
     try:
-        run_benchmark()
+        run_benchmark(feature_set=args.feature_set)
     except FileNotFoundError as exc:
         logger.error("%s", exc)
         sys.exit(1)

@@ -4,13 +4,45 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 
+def _build_engine_options(database_uri: str) -> dict:
+    """Pool settings sized for web workers plus the live background threads.
+
+    SQLite :memory: is pinned to StaticPool by Flask-SQLAlchemy and rejects
+    QueuePool sizing arguments, so it only gets connect_args.
+    """
+    connect_args = None
+    if database_uri.startswith("sqlite"):
+        # Busy timeout keeps concurrent live threads from dying on
+        # "database is locked"; check_same_thread allows pooled connections
+        # to hop between the request and monitor threads.
+        connect_args = {"check_same_thread": False, "timeout": 30}
+        if ":memory:" in database_uri:
+            return {"connect_args": connect_args}
+
+    options: dict = {
+        "pool_size": int(os.environ.get("DB_POOL_SIZE", 10)),
+        "max_overflow": int(os.environ.get("DB_MAX_OVERFLOW", 20)),
+        "pool_timeout": int(os.environ.get("DB_POOL_TIMEOUT", 45)),
+        "pool_recycle": int(os.environ.get("DB_POOL_RECYCLE", 1800)),
+        "pool_pre_ping": os.environ.get("DB_POOL_PRE_PING", "true").lower() == "true",
+    }
+    if connect_args:
+        options["connect_args"] = connect_args
+    return options
+
+
 class Config:
     SECRET_KEY = os.environ.get("SECRET_KEY", "dev-secret-change-me")
     BASE_DIR = BASE_DIR
     SQLALCHEMY_DATABASE_URI = os.environ.get(
         "DATABASE_URL", f"sqlite:///{BASE_DIR / 'packeteye.db'}"
     )
+    SQLALCHEMY_ENGINE_OPTIONS = _build_engine_options(SQLALCHEMY_DATABASE_URI)
     SQLALCHEMY_TRACK_MODIFICATIONS = False
+
+    STREAM_DATA_DIR = Path(os.environ.get("STREAM_DATA_DIR", str(BASE_DIR / "data" / "streams")))
+    PACKET_STREAM_ENABLED = os.environ.get("PACKET_STREAM_ENABLED", "true").lower() == "true"
+    ALERT_STREAM_ENABLED = os.environ.get("ALERT_STREAM_ENABLED", "true").lower() == "true"
 
     UPLOAD_FOLDER = os.environ.get("UPLOAD_FOLDER", str(BASE_DIR / "data" / "uploads"))
     MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", 500))
@@ -27,10 +59,20 @@ class Config:
 
     LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "zai")
     LLM_API_KEY = os.environ.get("LLM_API_KEY") or os.environ.get("NVIDIA_API_KEY", "")
-    LLM_MODEL = os.environ.get("LLM_MODEL", "deepseek-ai/deepseek-v4-pro")
+    LLM_MODEL = os.environ.get("LLM_MODEL", "minimaxai/minimax-m3")
+    LLM_CHAT_MODELS = os.environ.get(
+        "LLM_CHAT_MODELS",
+        "minimaxai/minimax-m3,meta/llama-3.1-8b-instruct,nvidia/llama-3.1-nemotron-nano-8b-v1,deepseek-ai/deepseek-v4-pro",
+    )
+    LLM_REPORT_MAX_TOKENS = int(os.environ.get("LLM_REPORT_MAX_TOKENS", 2048))
     ZAI_API_KEY = os.environ.get("ZAI_API_KEY", "")
     ZAI_API_BASE = os.environ.get("ZAI_API_BASE", "https://api.z.ai/api/paas/v4/")
-    ZAI_MODEL = os.environ.get("ZAI_MODEL", "glm-4-flash")
+    ZAI_MODEL = os.environ.get("ZAI_MODEL", "glm-4.7-flash")
+    # Single-provider mode: "zai", "nvidia", or empty for multi-model stack.
+    LLM_SINGLE_PROVIDER = os.environ.get("LLM_SINGLE_PROVIDER", "").strip().lower()
+    # Legacy aliases (prefer LLM_SINGLE_PROVIDER)
+    LLM_ZAI_ONLY = os.environ.get("LLM_ZAI_ONLY", "false").lower() == "true"
+    LLM_NVIDIA_ONLY = os.environ.get("LLM_NVIDIA_ONLY", "false").lower() == "true"
     NVIDIA_FALLBACK_MODEL = os.environ.get("NVIDIA_FALLBACK_MODEL", "") or LLM_MODEL
     LLM_MAX_TOKENS = int(os.environ.get("LLM_MAX_TOKENS", 768))
     LLM_MAX_CALLS_PER_ANALYSIS = int(os.environ.get("LLM_MAX_CALLS_PER_ANALYSIS", 25))
@@ -50,6 +92,9 @@ class Config:
     OPENROUTER_MODEL = os.environ.get("OPENROUTER_MODEL", "deepseek/deepseek-chat")
     OPENROUTER_BASE = os.environ.get("OPENROUTER_BASE", "https://openrouter.ai/api/v1")
     OPENROUTER_MAX_TOKENS = int(os.environ.get("OPENROUTER_MAX_TOKENS", 256))
+    # Set false when the OpenRouter account is out of credits — a keyed but
+    # broke provider otherwise turns every live packet into a 402 retry storm.
+    OPENROUTER_ENABLED = os.environ.get("OPENROUTER_ENABLED", "true").lower() == "true"
 
     VIRUSTOTAL_API_KEY = os.environ.get("VIRUSTOTAL_API_KEY", "")
     ABUSEIPDB_API_KEY = os.environ.get("ABUSEIPDB_API_KEY", "")
@@ -68,7 +113,12 @@ class Config:
     LLM_LIVE_PACKETS_PER_MIN = int(os.environ.get("LLM_LIVE_PACKETS_PER_MIN", 30))
     LLM_LIVE_PACKET_MIN_CONFIDENCE = float(os.environ.get("LLM_LIVE_PACKET_MIN_CONFIDENCE", 0.55))
     LLM_LIVE_TIMEOUT_SECONDS = float(os.environ.get("LLM_LIVE_TIMEOUT_SECONDS", 18))
-    LLM_LIVE_PACKET_MAX_TOKENS = int(os.environ.get("LLM_LIVE_PACKET_MAX_TOKENS", 256))
+    LLM_PROBE_TIMEOUT_SECONDS = float(os.environ.get("LLM_PROBE_TIMEOUT_SECONDS", 12))
+    LLM_LIVE_PACKET_MAX_TOKENS = int(os.environ.get("LLM_LIVE_PACKET_MAX_TOKENS", 128))
+    LLM_LIVE_BATCH_SIZE = int(os.environ.get("LLM_LIVE_BATCH_SIZE", 10))
+    # true restores the old fan-out to every configured model per packet;
+    # sequential (primary + conditional verify) is the rate-limit-safe default.
+    LLM_LIVE_PARALLEL_TRIAGE = os.environ.get("LLM_LIVE_PARALLEL_TRIAGE", "false").lower() == "true"
     LIVE_ML_LAB_THRESHOLD = float(os.environ.get("LIVE_ML_LAB_THRESHOLD", 4.0))
     EVE_IMPORT_MAX_MB = int(os.environ.get("EVE_IMPORT_MAX_MB", 100))
 
@@ -142,10 +192,24 @@ class Config:
     ALERT_WEBHOOK_MIN_SEVERITY = os.environ.get("ALERT_WEBHOOK_MIN_SEVERITY", "high")
     ALERT_WEBHOOK_RATE_LIMIT = int(os.environ.get("ALERT_WEBHOOK_RATE_LIMIT", 10))  # per minute
 
+    # Integration settings (Discord webhooks, filters) — UI writes data/integrations.json
+    INTEGRATIONS_CONFIG_PATH = os.environ.get("INTEGRATIONS_CONFIG_PATH", "data/integrations.json")
+
     # SOC chatbot (reuses LLM_* provider settings)
     CHATBOT_ENABLED = os.environ.get("CHATBOT_ENABLED", "true").lower() == "true"
     CHATBOT_MAX_HISTORY = int(os.environ.get("CHATBOT_MAX_HISTORY", 10))
     CHATBOT_MAX_CONTEXT_CHARS = int(os.environ.get("CHATBOT_MAX_CONTEXT_CHARS", 32000))
+    CHATBOT_BRIEF_MAX_TOKENS = int(os.environ.get("CHATBOT_BRIEF_MAX_TOKENS", 256))
+    CHATBOT_BRIEF_MAX_CONTEXT_CHARS = int(os.environ.get("CHATBOT_BRIEF_MAX_CONTEXT_CHARS", 12000))
+
+    # Escalation email (Google SMTP / Gmail app password)
+    SMTP_ENABLED = os.environ.get("SMTP_ENABLED", "false").lower() == "true"
+    SMTP_HOST = os.environ.get("SMTP_HOST", "smtp.gmail.com")
+    SMTP_PORT = int(os.environ.get("SMTP_PORT", 587))
+    SMTP_USER = os.environ.get("SMTP_USER", "")
+    SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
+    SMTP_FROM = os.environ.get("SMTP_FROM", "") or os.environ.get("SMTP_USER", "")
+    ESCALATION_DEFAULT_TO = os.environ.get("ESCALATION_DEFAULT_TO", "")
 
     RATELIMIT_DEFAULT = "200 per hour"
     RATELIMIT_UPLOAD = "10 per hour"
@@ -167,6 +231,8 @@ class ProductionConfig(Config):
 class TestingConfig(Config):
     TESTING = True
     SQLALCHEMY_DATABASE_URI = "sqlite:///:memory:"
+    SQLALCHEMY_ENGINE_OPTIONS = _build_engine_options(SQLALCHEMY_DATABASE_URI)
+    STREAM_DATA_DIR = BASE_DIR / "data" / "streams_test"
     LLM_ENABLED = False
     WHITELIST_ENABLED = False
     CACHE_TYPE = "SimpleCache"

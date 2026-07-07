@@ -1,0 +1,30 @@
+#!/usr/bin/env python3
+"""Remove Cursor/agent Co-authored-by trailers from commit messages."""
+import re
+import sys
+
+BLOCKED = (
+    re.compile(r"^co-authored-by:\s*.*cursor", re.I),
+    re.compile(r"^co-authored-by:\s*.*cursoragent", re.I),
+    re.compile(r"^co-authored-by:\s*.*composer", re.I),
+)
+
+
+def main() -> int:
+    if len(sys.argv) < 2:
+        return 0
+    path = sys.argv[1]
+    try:
+        with open(path, encoding="utf-8") as f:
+            lines = f.readlines()
+    except OSError:
+        return 0
+    kept = [line for line in lines if not any(p.match(line.strip()) for p in BLOCKED)]
+    if kept != lines:
+        with open(path, "w", encoding="utf-8") as f:
+            f.writelines(kept)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
